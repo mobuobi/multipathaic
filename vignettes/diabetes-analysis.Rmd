@@ -192,7 +192,7 @@ forest <- build_paths(
   verbose = FALSE
 )
 
-print(forest$all_models)
+# print(forest$all_models)
 
 cat("Total models explored:", nrow(forest$all_models), "\n")
 cat("Models at final step:", nrow(forest$path_forest$frontiers[[length(forest$path_forest$frontiers)]]), "\n")
@@ -215,7 +215,7 @@ stab <- stability(
   verbose = FALSE
 )
 
-print(stab$pi)
+# print(stab$pi)
 
 # Display top stable variables
 cat("\nTop 10 most stable variables:\n")
@@ -239,7 +239,7 @@ plaus <- plausible_models(
   verbose = FALSE
 )
 
-print(plaus$plausible_models)
+# print(plaus$plausible_models)
 
 cat("Number of plausible models:", nrow(plaus$plausible_models), "\n")
 cat("Best AIC:", round(plaus$best_aic, 2), "\n\n")
