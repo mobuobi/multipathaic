@@ -1,0 +1,670 @@
+---
+title: "Multi-Path AIC Selection: Methodology"
+author: "Michael Obuobi"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+    mathjax: "https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-AMS_CHTML"
+vignette: >
+  %\VignetteIndexEntry{Multi-Path AIC Selection: Methodology}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  echo = TRUE,
+  results = 'hide',
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+---
+
+**Package Repository:** [https://github.com/mobuobi/multipathaic.git](https://github.com/mobuobi/multipathaic.git)
+
+**Documentation:** See [Function Reference](../function_reference.md) for complete API details.
+
+---
+
+# Introduction
+
+Traditional forward stepwise selection follows a single greedy path, making locally optimal choices at each step without considering alternative competitive models. This can lead to:
+
+- **Path dependency**: Early suboptimal choices cannot be corrected
+- **Instability**: Small changes in data lead to completely different models
+- **Overlooked alternatives**: Models nearly as good may never be explored
+
+The **multipathaic** package addresses these limitations through a three-stage approach:
+
+1. **Multi-Path Exploration** - Maintain multiple competitive model paths
+2. **Stability Assessment** - Quantify variable reliability via bootstrap resampling
+3. **Plausible Model Filtering** - Select models balancing fit quality and stability
+
+This vignette explains the methodology and algorithms underlying the package.
+
+---
+
+# Problem Setup
+
+## Notation
+
+- $\mathbf{y}$: Response vector ($n \times 1$)
+- $\mathbf{X}$: Predictor matrix ($n \times p$)
+- $\mathcal{M}$: A candidate model (subset of predictors)
+- $\text{AIC}(\mathcal{M})$: Akaike Information Criterion for model $\mathcal{M}$
+
+## Objective
+
+Find a set of **plausible models** that:
+
+1. Have low AIC (good fit without excessive complexity)
+2. Are built from **stable variables** (reliably selected across data perturbations)
+3. Represent diverse competitive solutions (not just a single path)
+
+---
+
+# Algorithm 1: Multi-Path Forward Selection
+
+## Motivation
+
+Standard forward selection follows a single greedy path:
+```
+Step 0: {} (null model)
+Step 1: {x₃} (best single variable)
+Step 2: {x₃, x₇} (best addition to x₃)
+Step 3: {x₃, x₇, x₁} (best addition to x₃, x₇)
+...
+```
+
+**Problem:** If $\{x_5\}$ was almost as good as $\{x_3\}$ at Step 1, we never explore the $x_5$ branch.
+
+## The Multi-Path Approach
+
+Instead of keeping only the best model, we maintain a **frontier** of competitive models at each step by:
+
+1. For each model in the current frontier, try adding each unused variable
+2. Compute AIC for all candidate expansions
+3. Keep the best $L$ models whose AIC is within $\delta$ of the overall best
+
+This creates a **forest of paths** rather than a single tree.
+
+## Algorithm Details
+
+### Input Parameters
+
+- **K**: Maximum number of forward steps
+- **eps**: Minimum AIC improvement to continue (stopping criterion)
+- **delta**: AIC tolerance for keeping near-optimal models (branching criterion)
+- **L**: Maximum models to retain per step (computational limit)
+
+### Pseudocode
+```
+Algorithm: build_paths(X, y, K, eps, delta, L)
+
+Input: Data (X, y), parameters (K, eps, delta, L)
+Output: Forest of model paths
+
+1. Initialize:
+   F₀ = {∅}  (frontier contains only null model)
+   
+2. For k = 1 to K:
+   
+   a. Generate candidates:
+      For each model M in Fₖ₋₁:
+        For each variable x not in M:
+          Create candidate M ∪ {x}
+          Compute AIC(M ∪ {x})
+   
+   b. Find best AIC:
+      AIC* = min{AIC over all candidates}
+   
+   c. Filter by AIC tolerance:
+      Keep candidates where AIC ≤ AIC* + delta
+   
+   d. Limit frontier size:
+      Fₖ = top L models by AIC from filtered candidates
+   
+   e. Check stopping condition:
+      If min(AIC in Fₖ) - min(AIC in Fₖ₋₁) < eps:
+        STOP (insufficient improvement)
+
+3. Return: All models from F₁, F₂, ..., Fₖ
+```
+
+### Key Design Choices
+
+**Delta (δ)**: Controls exploration breadth
+- Small δ (e.g., 0.5): Conservative, stays close to best path
+- δ = 2: Standard choice (models within 2 AIC units have equivalent support)
+- Large δ (e.g., 5): Aggressive, explores many alternatives
+
+**L**: Controls computational cost
+- Small L (e.g., 25): Fast, less exploration
+- L = 50: Balanced (recommended)
+- Large L (e.g., 100): Thorough but slower
+
+## Example: Visualization
+```{r, eval=FALSE, echo=TRUE}
+# Simple example to illustrate path exploration
+library(multipathaic)
+
+# Generate toy data
+set.seed(42)
+n <- 100
+p <- 8
+X <- matrix(rnorm(n * p), n, p)
+colnames(X) <- paste0("x", 1:p)
+y <- X[,1] + 0.5*X[,2] + rnorm(n)
+
+# Build paths
+forest <- build_paths(X, y, family = "gaussian", K = 4, delta = 2, L = 10)
+```
+```{r, results='markup'}
+# In practice, you'd see output like:
+cat("Step 1: 8 candidates → Keep 5 models within AIC* + 2\n")
+cat("Step 2: 35 candidates → Keep 10 models within AIC* + 2\n")
+cat("Step 3: 70 candidates → Keep 10 models within AIC* + 2\n")
+cat("Step 4: 70 candidates → Keep 10 models within AIC* + 2\n")
+cat("\nTotal unique models explored: 35\n")
+```
+
+---
+
+# Algorithm 2: Stability Estimation
+
+## Motivation
+
+Even if a model has low AIC, it may be **unstable** - small changes to the data could lead to completely different variable selections. We want to identify variables that are **reliably selected** across data perturbations.
+
+## Bootstrap Stability
+
+For each variable $x_j$, we estimate its **stability score** $\pi_j$:
+
+$$\pi_j = P(\text{variable } x_j \text{ is selected})$$
+
+We approximate this probability using bootstrap resampling:
+
+1. Generate $B$ bootstrap samples from the data
+2. Run multi-path selection on each bootstrap sample
+3. Count how often $x_j$ appears in the selected models
+4. Compute $\pi_j$ = (frequency $x_j$ appears) / $B$
+
+### Interpretation
+
+- $\pi_j = 1.0$: Variable always selected (highly stable)
+- $\pi_j = 0.6$: Variable selected in 60% of resamples (moderately stable)
+- $\pi_j = 0.2$: Variable rarely selected (unstable)
+
+## Algorithm Details
+
+### Input Parameters
+
+- **B**: Number of bootstrap resamples (typically 50-200)
+- **resample_fraction**: Fraction of data to resample (typically 0.8)
+- All parameters from `build_paths()` (K, eps, delta, L)
+
+### Pseudocode
+```
+Algorithm: stability(X, y, K, eps, delta, L, B, resample_fraction)
+
+Input: Data (X, y), path parameters, bootstrap parameters (B, resample_fraction)
+Output: Stability scores π for each variable
+
+1. Initialize:
+   count[j] = 0 for all variables j = 1, ..., p
+   
+2. For b = 1 to B:
+   
+   a. Draw bootstrap sample:
+      (X_b, y_b) = resample(X, y, fraction = resample_fraction)
+   
+   b. Run multi-path selection:
+      forest_b = build_paths(X_b, y_b, K, eps, delta, L)
+   
+   c. Identify variables in best model:
+      M* = model with lowest AIC in forest_b
+      
+   d. Update counts:
+      For each variable j in M*:
+        count[j] = count[j] + 1
+
+3. Compute stability scores:
+   π[j] = count[j] / B  for all j
+
+4. Return: π (sorted in decreasing order)
+```
+
+### Design Considerations
+
+**Why bootstrap?**
+- Non-parametric: No distributional assumptions
+- Mimics sampling variation: Tests robustness to data perturbations
+- Well-established in statistical learning (Breiman, 1996)
+
+**Why resample_fraction < 1?**
+- Creates more variation between resamples
+- Better tests stability under realistic data limitations
+- Standard choice: 0.8 (80% subsampling)
+
+## Example Output
+```{r, results='markup'}
+# Example stability scores
+cat("Variable Stability Scores:\n")
+cat("x2:  π = 0.94 (highly stable)\n")
+cat("x5:  π = 0.86 (highly stable)\n")
+cat("x1:  π = 0.72 (moderately stable)\n")
+cat("x7:  π = 0.58 (marginally stable)\n")
+cat("x3:  π = 0.34 (unstable)\n")
+cat("x4:  π = 0.12 (unstable)\n")
+```
+
+---
+
+# Algorithm 3: Plausible Model Selection
+
+## Motivation
+
+We now have:
+1. A forest of models with varying AICs (from Algorithm 1)
+2. Stability scores for each variable (from Algorithm 2)
+
+We want to filter this forest to identify **plausible models** that are both:
+- **Near-optimal** in terms of AIC
+- **Built from stable variables**
+
+## Filtering Criteria
+
+A model $\mathcal{M}$ is **plausible** if:
+
+1. **AIC Criterion**: $\text{AIC}(\mathcal{M}) \leq \text{AIC}^* + \Delta$
+   - Where $\text{AIC}^*$ = lowest AIC among all explored models
+   - $\Delta$ = tolerance (typically 2, following Burnham & Anderson, 2002)
+
+2. **Stability Criterion**: $\bar{\pi}(\mathcal{M}) \geq \tau$
+   - Where $\bar{\pi}(\mathcal{M})$ = mean stability of variables in $\mathcal{M}$
+   - $\tau$ = threshold (typically 0.6, meaning variables appear in >60% of resamples)
+
+## Algorithm Details
+
+### Input Parameters
+
+- **forest**: Output from `build_paths()` (all explored models)
+- **pi**: Output from `stability()` (stability scores)
+- **Delta**: AIC tolerance (typically 2)
+- **tau**: Minimum average stability (typically 0.6)
+
+### Pseudocode
+```
+Algorithm: plausible_models(forest, pi, Delta, tau)
+
+Input: Forest of models, stability scores π, thresholds (Delta, tau)
+Output: Subset of plausible models
+
+1. Find best AIC:
+   AIC* = min{AIC(M) : M in forest}
+
+2. For each model M in forest:
+   
+   a. Check AIC criterion:
+      If AIC(M) > AIC* + Delta:
+        REJECT (too far from best AIC)
+        Continue to next model
+   
+   b. Compute average stability:
+      π̄(M) = mean{π[j] : variable j in M}
+   
+   c. Check stability criterion:
+      If π̄(M) < tau:
+        REJECT (built from unstable variables)
+        Continue to next model
+   
+   d. If both criteria pass:
+      ADD M to plausible set
+
+3. Return: 
+   - Plausible models (sorted by AIC)
+   - Best AIC value (AIC*)
+   - Variable summary (inclusion frequency, mean stability)
+```
+
+## Interpretation of Results
+
+### Plausible Models Table
+
+For each plausible model, we report:
+- **Variables**: List of predictors in the model
+- **Size**: Number of variables (model complexity)
+- **AIC**: Akaike Information Criterion
+- **Avg Stability**: Mean stability score of variables
+
+### Variable Summary Table
+
+For each variable appearing in plausible models:
+- **Inclusion %**: Percentage of plausible models containing this variable
+- **Avg Stability**: Mean stability score from bootstrap
+- **Interpretation**: Variables with high inclusion % and high stability are the most reliable predictors
+
+## Example
+```{r, results='markup'}
+cat("PLAUSIBLE MODELS (Delta=2, tau=0.6):\n\n")
+cat("Best AIC: 2847.32\n\n")
+
+cat("Model 1: [x2, x5, x8, x1]  |  Size=4  |  AIC=2847.32  |  Avg_Stab=0.83\n")
+cat("Model 2: [x2, x5, x8]      |  Size=3  |  AIC=2848.15  |  Avg_Stab=0.87\n")
+cat("Model 3: [x2, x5, x1]      |  Size=3  |  AIC=2849.01  |  Avg_Stab=0.84\n\n")
+
+cat("VARIABLE SUMMARY:\n\n")
+cat("Variable | Inclusion% | Avg_Stability\n")
+cat("---------|------------|---------------\n")
+cat("x2       |    100%    |     0.94\n")
+cat("x5       |    100%    |     0.86\n")
+cat("x8       |     67%    |     0.82\n")
+cat("x1       |     67%    |     0.72\n")
+```
+
+**Interpretation**: 
+- x2 and x5 are core predictors (100% inclusion, high stability)
+- x8 and x1 are important but less consistent (67% inclusion)
+- Choose Model 1 for best fit or Model 2 for parsimony
+
+---
+
+# Complete Pipeline: multipath_aic()
+
+The `multipath_aic()` function combines all three algorithms into a single convenient call:
+```{r, eval=FALSE}
+result <- multipath_aic(
+  X = X_train,
+  y = y_train,
+  family = "gaussian",
+  
+  # Path building parameters
+  K = 10,
+  eps = 1e-6,
+  delta = 2,
+  L = 50,
+  
+  # Stability parameters
+  B = 100,
+  resample_fraction = 0.8,
+  
+  # Filtering parameters
+  Delta = 2,
+  tau = 0.6,
+  
+  verbose = TRUE
+)
+```
+
+## Output Structure
+```{r, results='markup'}
+cat("result$forest              # All explored models from build_paths()\n")
+cat("result$stability           # Variable stability scores from stability()\n")
+cat("result$plausible_models    # Filtered plausible models\n")
+cat("  ├─ $plausible_models     # Data frame of models passing filters\n")
+cat("  ├─ $best_aic             # Lowest AIC value\n")
+cat("  └─ $summary              # Variable inclusion summary\n")
+```
+
+---
+
+# Parameter Tuning Guidelines
+
+## Quick Reference
+
+| Parameter | Role | Typical Values | Recommendation |
+|-----------|------|----------------|----------------|
+| **K** | Max steps | 5-20 | `min(p, 10)` |
+| **eps** | Stop threshold | 1e-8 to 1e-4 | `1e-6` |
+| **delta** | Path branching | 1-4 | `2` |
+| **L** | Frontier size | 25-100 | `50` |
+| **B** | Bootstrap samples | 50-200 | `100` |
+| **resample_fraction** | Bootstrap size | 0.6-0.9 | `0.8` |
+| **Delta** | AIC filter | 1-4 | `2` |
+| **tau** | Stability filter | 0.5-0.8 | `0.6` |
+
+## Detailed Guidance
+
+### Exploration vs. Computation Tradeoff
+
+**More exploration** (finds more alternatives, slower):
+- Increase `delta` (e.g., 3-4)
+- Increase `L` (e.g., 75-100)
+- Increase `B` (e.g., 150-200)
+
+**Faster computation** (more focused, quicker):
+- Decrease `delta` (e.g., 1)
+- Decrease `L` (e.g., 25)
+- Decrease `B` (e.g., 50)
+
+### Problem-Specific Adjustments
+
+**High-dimensional problems** (p > n):
+- Limit `K` to 5-8 (prevent overfitting)
+- Increase `tau` to 0.7-0.8 (stricter stability)
+- Use `delta = 2` (moderate exploration)
+
+**Highly correlated predictors**:
+- Increase `delta` to 3-4 (more path diversity)
+- Increase `B` to 100-200 (better stability estimates)
+- May need to lower `tau` to 0.5 (relaxed stability)
+
+**Small sample size** (n < 100):
+- Use `resample_fraction = 0.9` (larger bootstrap samples)
+- Reduce `B` to 50 (each resample is more similar)
+- Limit `K` to 5-7 (prevent overfitting)
+
+---
+
+# Statistical Justification
+
+## Why AIC?
+
+The Akaike Information Criterion balances model fit with complexity:
+
+$$\text{AIC} = -2 \log L(\hat{\theta}) + 2k$$
+
+Where:
+- $L(\hat{\theta})$ = maximized likelihood
+- $k$ = number of parameters
+
+**Advantages**:
+- Asymptotically equivalent to cross-validation
+- Penalizes overfitting
+- Allows direct model comparison
+
+## Why Delta = 2?
+
+Burnham & Anderson (2002) provide evidence-based guidelines:
+
+- $\Delta_i < 2$: Model has **substantial support**
+- $2 \leq \Delta_i \leq 7$: Model has **considerably less support**
+- $\Delta_i > 10$: Model has **essentially no support**
+
+Where $\Delta_i = \text{AIC}_i - \text{AIC}_{\text{min}}$
+
+Using $\Delta = 2$ retains only models with substantial empirical support.
+
+## Why Bootstrap Stability?
+
+Bootstrap resampling (Efron, 1979; Breiman, 1996):
+- Non-parametric: No distributional assumptions required
+- Mimics sampling variation: Tests robustness to data perturbations
+- Well-studied: Theoretical properties well-understood
+- Practical: Computationally feasible with modern hardware
+
+Variables with high bootstrap selection frequency ($\pi > 0.6$) are reliably identified as important predictors, even under data perturbations.
+
+## Why tau = 0.6?
+
+A threshold of 0.6 means variables must appear in **at least 60% of bootstrap samples**. This provides:
+
+- Strong evidence of reliability (more than half the time)
+- Protection against spurious selections
+- Balance between strictness and practicality
+
+Sensitivity analysis shows results are robust to $\tau \in [0.5, 0.7]$.
+
+---
+
+# Advantages Over Traditional Methods
+
+## vs. Single-Path Forward Selection
+
+| Aspect | Traditional Forward | Multi-Path AIC |
+|--------|---------------------|----------------|
+| **Exploration** | Single greedy path | Multiple competitive paths |
+| **Stability** | Not assessed | Quantified via bootstrap |
+| **Robustness** | High variance | Identifies stable predictors |
+| **Alternatives** | None | Multiple plausible models |
+
+## vs. All-Subsets Regression
+
+| Aspect | All-Subsets | Multi-Path AIC |
+|--------|-------------|----------------|
+| **Feasibility** | $2^p$ models (infeasible for large p) | Explores $\sim K \times L$ models |
+| **Stability** | Not assessed | Built-in stability estimation |
+| **Computation** | Exponential in p | Linear in K, manageable with L |
+
+## vs. Lasso/Ridge Regression
+
+| Aspect | Regularization | Multi-Path AIC |
+|--------|----------------|----------------|
+| **Interpretability** | Continuous shrinkage | Discrete variable selection |
+| **Stability** | Depends on tuning | Explicitly measured |
+| **Multiple solutions** | Single λ chosen | Multiple plausible models |
+| **Inference** | Post-selection inference complex | Clear model sets for reporting |
+
+---
+
+# Practical Recommendations
+
+## Workflow
+
+1. **Start with defaults**:
+```r
+   result <- multipath_aic(X, y, family = "gaussian")
+```
+
+2. **Examine results**:
+   - Check number of plausible models
+   - Review variable summary table
+   - Look at stability scores
+
+3. **Adjust if needed**:
+   - **No plausible models**: Decrease `tau` or increase `Delta`
+   - **Too many models**: Increase `tau` or decrease `Delta`
+   - **Computational time**: Decrease `L` or `B`
+
+4. **Validate**:
+   - Evaluate selected models on held-out test data
+   - Compare multiple plausible models if performance similar
+   - Consider domain knowledge in final selection
+
+## Reporting Results
+
+When publishing analyses using this method, report:
+
+1. **Parameter values used**: K, delta, L, B, Delta, tau
+2. **Number of models explored** vs. **number of plausible models**
+3. **Variable summary table**: Shows inclusion frequency and stability
+4. **Final model(s)**: Variables, AIC, test set performance
+5. **Justification**: Why specific threshold values were chosen
+
+---
+
+# Limitations and Considerations
+
+## Computational Complexity
+
+- **Time**: $O(B \times K \times L \times p)$ 
+- For very large $p$ (e.g., $p > 1000$), consider:
+  - Pre-screening variables using univariate tests
+  - Using smaller $K$, $L$, or $B$
+  - Parallel computation of bootstrap samples
+
+## Model Family
+
+Currently supports:
+- **Gaussian** (linear regression)
+- **Binomial** (logistic regression)
+
+Future extensions could include:
+- Poisson, negative binomial (count data)
+- Survival models (Cox regression)
+- Multinomial (multi-class classification)
+
+## Assumptions
+
+- **Independence**: Observations are independent
+- **Model form**: Linear relationship between predictors and response (or link function)
+- **No time structure**: Not designed for time series or longitudinal data
+
+---
+
+# References
+
+Akaike, H. (1974). A new look at the statistical model identification. *IEEE Transactions on Automatic Control*, 19(6), 716-723.
+
+Breiman, L. (1996). Bagging predictors. *Machine Learning*, 24(2), 123-140.
+
+Burnham, K. P., & Anderson, D. R. (2002). *Model Selection and Multimodel Inference: A Practical Information-Theoretic Approach* (2nd ed.). Springer-Verlag.
+
+Efron, B. (1979). Bootstrap methods: Another look at the jackknife. *The Annals of Statistics*, 7(1), 1-26.
+
+Hastie, T., Tibshirani, R., & Friedman, J. (2009). *The Elements of Statistical Learning* (2nd ed.). Springer.
+
+---
+
+# Appendix: Mathematical Details
+
+## AIC Derivation
+
+For Gaussian linear models:
+
+$$\text{AIC} = n \log\left(\frac{\text{RSS}}{n}\right) + 2k$$
+
+Where:
+- RSS = residual sum of squares
+- n = sample size
+- k = number of parameters (including intercept)
+
+For binomial logistic models:
+
+$$\text{AIC} = -2 \sum_{i=1}^n \left[y_i \log(\hat{p}_i) + (1-y_i)\log(1-\hat{p}_i)\right] + 2k$$
+
+## Stability Score Estimation
+
+Let $S^{(b)}$ be the set of selected variables in bootstrap sample $b$. Then:
+
+$$\hat{\pi}_j = \frac{1}{B} \sum_{b=1}^B \mathbb{1}(j \in S^{(b)})$$
+
+Where $\mathbb{1}(\cdot)$ is the indicator function.
+
+**Asymptotic properties**: As $B \to \infty$, $\hat{\pi}_j \to \pi_j$ (true selection probability).
+
+## Average Stability for a Model
+
+For a model $\mathcal{M} = \{j_1, j_2, \ldots, j_k\}$:
+
+$$\bar{\pi}(\mathcal{M}) = \frac{1}{k} \sum_{j \in \mathcal{M}} \pi_j$$
+
+This measures the **average reliability** of the variables in the model.
+
+---
+
+**Package Version:** 0.1.0  
+**Last Updated:** December 2024  
+**Maintainer:** Michael Obuobi  
+**GitHub:** [https://github.com/mobuobi/multipathaic](https://github.com/mobuobi/multipathaic)
