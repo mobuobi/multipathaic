@@ -5,8 +5,8 @@ Multi-path AIC selection for linear and logistic regression with stability-based
 ## Quick Links
 
 - **[Function Reference](function_reference.md)** - Complete API documentation
-- **[Method Vignette](vignettes/diabetes-analysis.Rmd)** - Detailed methodology
-- **[Diabetes Analysis](vignettes/diabetes_analysis.Rmd)** - Case study demonstration
+- **[Method Vignette](vignettes/method_vignette.Rmd)** - Detailed methodology
+- **[Diabetes Analysis](vignettes/diabetes-analysis.Rmd)** - Case study demonstration
 
 
 ## Installation
