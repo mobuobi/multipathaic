@@ -31,7 +31,7 @@ Install the package directly from GitHub:
 install.packages("remotes")
 
 # Install multipathaic
-remotes::install_github("R-4-Data-Science/FinalProjectmultipathaic")
+remotes::install_github("mobuobi/multipathaic")
 ```
 
 ## Interactive Shiny App 
