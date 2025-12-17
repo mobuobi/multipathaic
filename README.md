@@ -363,7 +363,7 @@ https://github.com/mobuobi/multipathaic.git
 
 ## Author
 
-- **Michael Obuobi** (Auburn University) - [mio0011@auburn.edu](mailto:mio0011@auburn.edu)
+- **Michael Obuobi** - [obuobimichael25@gmail.com](mailto:obuobimichael25@gmail.com)
 
 ## License
 
