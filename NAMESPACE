@@ -2,6 +2,7 @@
 
 export(build_paths)
 export(confusion_metrics)
+export(launch_app)
 export(multipath_aic)
 export(plausible_models)
 export(stability)

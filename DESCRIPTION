@@ -25,5 +25,5 @@ Suggests:
     knitr,
     rmarkdown
 VignetteBuilder: knitr
-URL: https://github.com/R-4-Data-Science/multipathaic
-BugReports: https://github.com/R-4-Data-Science/multipathaic/issues
+URL: https://github.com/mobuobi/multipathaic
+BugReports: https://github.com/mobuobi/multipathaic/issues
