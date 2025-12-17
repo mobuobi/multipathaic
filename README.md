@@ -1,27 +1,13 @@
 # multipathaic
 
-Multi-Path Stepwise Selection with AIC for Linear and Logistic Regression
+Multi-path AIC selection for linear and logistic regression with stability-based model filtering.
 
-## Overview
+## Quick Links
 
-`multipathaic` implements a multi-path forward selection algorithm using the Akaike Information Criterion (AIC) for both linear (Gaussian) and logistic (binomial) regression models. Unlike traditional stepwise methods that follow a single greedy path, this approach explores multiple competitive model paths simultaneously by retaining near-optimal models at each step.
+- **[Function Reference](function_reference.md)** - Complete API documentation
+- **[Method Vignette](vignettes/method_vignette.Rmd)** - Detailed methodology
+- **[Diabetes Analysis](vignettes/diabetes_analysis.Rmd)** - Case study demonstration
 
-### Key Features
-
-- **Multi-path exploration**: Maintains multiple competitive models at each forward selection step
-- **Stability assessment**: Bootstrap resampling to identify reliable predictors
-- **Plausible model selection**: Combines AIC-based filtering with stability thresholds
-- **Dual family support**: Works with both Gaussian (linear) and binomial (logistic) regression
-- **Diagnostic tools**: Confusion matrix and performance metrics for classification models
-- **Interactive Shiny App**: Professional dashboard with data upload, visualizations, and real-time analysis
-
-### Algorithms Implemented
-
-1. **`build_paths()`** — Multi-path forward selection using AIC with branching
-2. **`stability()`** — Resampling-based stability estimation with model-set proportions
-3. **`plausible_models()`** — AIC tolerance filtering combined with average stability thresholds
-4. **`multipath_aic()`** — Complete pipeline combining all three steps
-5. **`confusion_metrics()`** — Performance evaluation for logistic regression models
 
 ## Installation
 

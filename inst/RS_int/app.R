@@ -530,7 +530,7 @@ ui <- dashboardPage(
             ),
 
             h4("Installation"),
-            pre('install.packages("remotes")\nremotes::install_github("R-4-Data-Science/FinalProjectmultipathaic")'),
+            pre('install.packages("remotes")\nremotes::install_github("mobuobi/multipathaic")'),
 
             h4("Required Packages"),
             p("The app uses the following packages:"),
@@ -545,14 +545,14 @@ ui <- dashboardPage(
             p("Install all at once:"),
             pre('install.packages(c("shiny", "shinydashboard", "plotly", "DT", "ggplot2", "readxl"))'),
 
-            h4("Authors"),
-            p("Michael Obuobi, Jinchen Jiang, Farkhonda Rahmati"),
+            h4("Author"),
+            p("Michael Obuobi"),
             p("Auburn University, 2025"),
 
             hr(),
             p("Repository:",
               a("GitHub",
-                href = "https://github.com/R-4-Data-Science/FinalProjectmultipathaic",
+                href = "https://github.com/mobuobi/multipathaic",
                 target = "_blank", class = "btn btn-primary"))
           )
         )
