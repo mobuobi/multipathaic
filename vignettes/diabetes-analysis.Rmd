@@ -1,0 +1,366 @@
+---
+title: "Multi-Path AIC Selection: Diabetes Progression Analysis"
+author: "Michael Obuobi, Jinchen Jiang, Farkhonda Rahmati"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: true
+    highlight: tango
+vignette: >
+  %\VignetteIndexEntry{Multi-Path AIC Selection: Diabetes Progression Analysis}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5
+)
+```
+
+---
+
+**Package Repository:** [https://github.com/mobuobi/multipathaic.git](https://github.com/mobuobi/multipathaic.git)
+
+**Package Installation:**
+```{r, eval=FALSE}
+# Install from GitHub
+remotes::install_github("mobuobi/multipathaic")
+```
+
+---
+
+# About the multipathaic Package
+
+The **multipathaic** package implements a multi-path forward selection procedure for linear and logistic regression. Unlike traditional stepwise selection that commits to a single greedy path, this approach:
+
+- **Explores multiple competitive model paths** simultaneously
+- **Assesses variable stability** through bootstrap resampling  
+- **Identifies plausible models** that balance goodness-of-fit (AIC) with reliability (stability)
+
+## Core Functions
+
+The package provides four main functions:
+
+1. **`build_paths()`** - Multi-path forward selection with AIC-based branching
+2. **`stability()`** - Bootstrap-based variable stability estimation
+3. **`plausible_models()`** - Filter models using AIC tolerance and stability thresholds
+4. **`multipath_aic()`** - Complete pipeline combining all three steps
+
+## Supported Models
+
+- **Gaussian (Linear Regression)**: Continuous outcomes
+- **Binomial (Logistic Regression)**: Binary outcomes with classification metrics
+
+---
+
+
+# Introduction
+
+This vignette demonstrates the multi-path AIC selection procedure on the diabetes progression dataset from Efron et al. (2004). The dataset contains 442 patients with 10 baseline predictors measuring various health indicators, and the goal is to predict a continuous measure of disease progression one year after baseline.
+
+We extend the predictor set by including second-order interaction and quadratic terms, resulting in 20 predictors. This creates a challenging variable selection problem ideal for demonstrating the multi-path approach.
+
+## Load the Package and Data
+```{r load-packages, message=FALSE}
+library(multipathaic)
+library(lars)
+library(caret)
+```
+
+```{r load-data}
+# Load diabetes data
+data(diabetes)
+
+str(diabetes)
+
+# Extract response and predictors
+y <- diabetes$y
+X <- as.data.frame(diabetes$x)
+
+# Display original dimensions
+cat("Original dimensions:", nrow(X), "observations,", ncol(X), "predictors\n")
+```
+
+
+## Feature Engineering
+
+We create second-order polynomial features to reach 60 predictors by including quadratic terms and the most correlated pairwise interactions:
+```{r feature-engineering}
+X_matrix <- unclass(diabetes$x)
+X <- as.data.frame(X_matrix)
+y <- as.numeric(diabetes$y)
+
+cat("Original predictors:", ncol(X), "\n")
+
+# Step 1: Create ALL second-order terms using formula
+formula_expanded <- as.formula(
+  paste("~ (", paste(colnames(X), collapse = " + "), ")^2 + I(", 
+        paste(colnames(X), "^2", collapse = ") + I("), ")")
+)
+
+X_all_terms <- as.data.frame(model.matrix(formula_expanded, data = X))
+X_all_terms <- X_all_terms[, -1]  # Remove intercept
+
+# Clean column names
+colnames(X_all_terms) <- make.names(colnames(X_all_terms), unique = TRUE)
+
+cat("Total terms created:", ncol(X_all_terms), "\n")
+
+# Step 2: Identify which columns are interactions vs quadratics vs originals
+original_vars <- colnames(X)
+quadratic_vars <- paste0("I.", colnames(X), ".2.")
+interaction_vars <- setdiff(colnames(X_all_terms), c(original_vars, quadratic_vars))
+
+cat("  - Original variables:", length(original_vars), "\n")
+cat("  - Quadratic terms:", length(quadratic_vars), "\n")
+cat("  - All interactions:", length(interaction_vars), "\n")
+
+# Step 3: Calculate correlations for interactions only
+interaction_cors <- sapply(interaction_vars, function(var_name) {
+  abs(cor(X_all_terms[[var_name]], y))
+})
+
+# Step 4: Select top 40 interactions
+top_40_interactions <- names(sort(interaction_cors, decreasing = TRUE)[1:40])
+
+cat("  - Top interactions selected:", length(top_40_interactions), "\n")
+
+# Step 5: Build final dataset with: originals + quadratics + top 40 interactions
+X_expanded <- cbind(
+  X_all_terms[, original_vars],
+  X_all_terms[, quadratic_vars],
+  X_all_terms[, top_40_interactions]
+)
+
+# Clean up column names
+colnames(X_expanded) <- make.names(colnames(X_expanded), unique = TRUE)
+
+cat("\nExpanded feature space:\n")
+cat("  - Original variables:", length(original_vars), "\n")
+cat("  - Quadratic terms:", length(quadratic_vars), "\n")
+cat("  - Top pairwise interactions:", length(top_40_interactions), "\n")
+cat("  - Total predictors:", ncol(X_expanded), "\n\n")
+
+# Standardize predictors
+X_scaled <- as.data.frame(scale(X_expanded))
+
+cat("Final dimensions:", nrow(X_scaled), "observations ×", ncol(X_scaled), "predictors\n")
+```
+
+
+
+## Train/Test Split
+
+We use a 70/30 train/test split to evaluate model performance:
+```{r train-test-split}
+set.seed(123)
+train_idx <- createDataPartition(y, p = 0.7, list = FALSE)
+
+X_train <- X_scaled[train_idx, ]
+X_test <- X_scaled[-train_idx, ]
+y_train <- y[train_idx]
+y_test <- y[-train_idx]
+
+cat("Training set:", nrow(X_train), "samples\n")
+cat("Test set:", nrow(X_test), "samples\n")
+```
+
+# Multi-Path AIC Procedure
+
+We now apply the complete multi-path AIC selection pipeline:
+
+## Algorithm 1: Multi-Path Forward Selection
+
+We explore multiple competitive model paths using AIC-based branching:
+```{r build-paths}
+forest <- build_paths(
+  X = X_train,
+  y = y_train,
+  family = "gaussian",
+  K=min(ncol(X), 10),           # Maximum 10 steps
+  eps = 1e-6,                   # Minimum AIC improvement
+  delta = 2,                    # AIC tolerance for branching
+  L = 50,                       # Keep top 50 models per step
+  verbose = FALSE
+)
+
+print(forest$all_models)
+
+cat("Total models explored:", nrow(forest$all_models), "\n")
+cat("Models at final step:", nrow(forest$path_forest$frontiers[[length(forest$path_forest$frontiers)]]), "\n")
+```
+
+## Algorithm 2: Stability Estimation
+
+We assess variable stability across 50 bootstrap resamples:
+```{r stability}
+stab <- stability(
+  X = X_train,
+  y = y_train,
+  family = "gaussian",
+  K=min(ncol(X), 10),
+  eps = 1e-6,
+  delta = 2,
+  L = 50,
+  B = 50,           # 50 bootstrap resamples
+  resample_fraction = 0.8,
+  verbose = FALSE
+)
+
+print(stab$pi)
+
+# Display top stable variables
+cat("\nTop 10 most stable variables:\n")
+print(round(head(stab$pi, 10), 3))
+```
+
+## Algorithm 3: Plausible Model Selection
+
+We filter models using AIC tolerance ($\Delta$ = 2) and stability threshold ($\tau$ = 0.6):
+
+**Parameter Justification:**
+
+- **Delta = 2**: Following the standard guideline (Burnham & Anderson, 2002) that models within 2 AIC units have essentially equivalent empirical support.
+- **tua = 0.6**: Ensures we retain only models built from variables appearing in >60% of resamples, providing confidence that selected variables are robust to sampling variation.
+```{r plausible-models}
+plaus <- plausible_models(
+  forest = forest,
+  pi = stab$pi,
+  Delta = 2,
+  tau = 0.6,
+  verbose = FALSE
+)
+
+print(plaus$plausible_models)
+
+cat("Number of plausible models:", nrow(plaus$plausible_models), "\n")
+cat("Best AIC:", round(plaus$best_aic, 2), "\n\n")
+
+# Display variable summary
+cat("Variable inclusion summary:\n")
+print(head(plaus$summary, 15))
+
+# Outcome
+
+library(kableExtra)
+
+best_aic_text <- paste0("Variable Inclusion and Stability Summary (Best AIC = ", 
+                        round(plaus$best_aic, 2), ")")
+
+head(plaus$summary, 15) %>%
+  kbl(caption = best_aic_text, digits = 3) %>%
+  kable_classic(full_width = FALSE, html_font = "Arial")
+```
+
+# Model Evaluation on Test Set
+
+We evaluate the best plausible model on the held-out test set:
+```{r test-evaluation}
+library(knitr)
+library(kableExtra)
+
+if (nrow(plaus$plausible_models) > 0) {
+  # Extract variables from best model
+  best_model_vars <- plaus$plausible_models$model[[1]]
+  
+  # Fit on training data
+  train_df <- data.frame(y = y_train, X_train[, best_model_vars, drop = FALSE])
+  final_fit <- lm(y ~ ., data = train_df)
+  
+  # Predict on test set
+  test_df <- X_test[, best_model_vars, drop = FALSE]
+  y_pred <- predict(final_fit, newdata = test_df)
+  
+  # Compute metrics
+  test_rmse <- sqrt(mean((y_test - y_pred)^2))
+  train_pred <- predict(final_fit)
+  train_rmse <- sqrt(mean((y_train - train_pred)^2))
+  test_cor <- cor(y_test, y_pred)
+  
+  # Create performance summary table
+  performance_table <- data.frame(
+    Metric = c(
+      "Variables Selected",
+      "Training RMSE",
+      "Test RMSE",
+      "Test Correlation (r)",
+      "Train R²",
+      "AIC (train)"
+    ),
+    Value = c(
+      length(best_model_vars),
+      round(train_rmse, 3),
+      round(test_rmse, 3),
+      round(test_cor, 3),
+      round(summary(final_fit)$r.squared, 3),
+      round(AIC(final_fit), 3)
+    )
+  )
+  
+  # Display table
+  kbl(performance_table,
+      caption = "Best Model Performance Summary",
+      align = c("l", "r"),
+      col.names = c("Performance Metric", "Value")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = FALSE,
+                  position = "left") %>%
+    row_spec(0, bold = TRUE, color = "white", background = "#3c8dbc") %>%
+    column_spec(1, bold = TRUE, width = "15em") %>%
+    column_spec(2, width = "10em", color = "#00a65a", bold = TRUE)
+  
+} else {
+  cat("No plausible models found.\n")
+}
+```
+
+
+# Summary and Parameter Justification
+
+This analysis demonstrates the multi-path AIC selection framework on a challenging regression problem with many correlated predictors. The procedure successfully:
+
+1. **Explored multiple competitive model paths** rather than committing to a single greedy sequence
+2. **Identified stable variables** that consistently appear across bootstrap resamples
+3. **Selected plausible models** that balance goodness-of-fit (low AIC) with stability (reliable variables)
+4. **Achieved good predictive performance** on held-out test data
+
+The final model includes `r if(nrow(plaus$plausible_models) > 0) length(plaus$plausible_models$model[[1]]) else "NA"` predictors and demonstrates that the multi-path approach can effectively navigate high-dimensional predictor spaces while maintaining model parsimony.
+
+
+
+# Recommended Parameter Choices
+
+The following parameters were used throughout this analysis:
+
+- **K = min(p, 10)**: Maximum number of forward selection steps, limited to avoid overfitting
+- **eps = 1e-6**: Minimum AIC improvement threshold (very small to allow exploration)
+- **delta = 2**: AIC tolerance for keeping near-tie models (follows standard guideline that models within 2 AIC units are indistinguishable)
+- **L = 25-100**: Maximum models kept per level to control computational growth
+- **B = 50-100**: Number of bootstrap resamples for stability (balance between precision and computation)
+- **Delta = 2**: AIC tolerance for plausibility filter (same rationale as delta)
+- **tau = 0.6**: Minimum average stability threshold (keeps models with variables appearing in >60% of resamples, indicating strong stability)
+
+# Justification
+
+**Delta = 2** is justified by the widely-accepted statistical principle that models within 2 AIC units have essentially equivalent support from the data (Burnham & Anderson, 2002).
+
+**tau = 0.6** ensures we retain only models built from variables that consistently appear across the majority of resamples, providing confidence that the selected variables are robust to sampling variation rather than artifacts of a particular dataset.
+
+These choices balance model exploration (allowing multiple competitive paths) with stability (filtering for reliable predictors).
+
+
+
+# References
+
+Efron, B., Hastie, T., Johnstone, I., & Tibshirani, R. (2004). Least angle regression. *The Annals of Statistics*, 32(2), 407-499.
+
+Burnham, K. P., & Anderson, D. R. (2002). *Model Selection and Multimodel Inference: A Practical Information-Theoretic Approach* (2nd ed.). Springer.
+

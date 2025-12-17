@@ -1,0 +1,31 @@
+Package: multipathaic
+Type: Package
+Title: Multi-Path Stepwise Selection with AIC
+Version: 0.1.0
+Authors@R: c(
+    person("Michael", "Obuobi", email = "mio0011@auburn.edu", role = c("aut", "cre")),
+    person("Jinchen", "Jiang", role = "aut"),
+    person("Far", "Rahmati", role = "aut"))
+Description: Implements a multi-path forward selection algorithm using the Akaike 
+    Information Criterion (AIC) for both linear (Gaussian) and logistic (binomial) 
+    regression models. Unlike traditional stepwise methods that follow a single path, 
+    this approach explores multiple competitive model paths simultaneously by retaining 
+    near-optimal models at each step. The package includes stability estimation via 
+    bootstrap resampling and identifies plausible models based on AIC tolerance and 
+    variable stability thresholds.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.3.2
+Depends: 
+    R (>= 3.5.0)
+Imports: 
+    stats
+Suggests: 
+    lars,
+    caret,
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+URL: https://github.com/R-4-Data-Science/multipathaic
+BugReports: https://github.com/R-4-Data-Science/multipathaic/issues
