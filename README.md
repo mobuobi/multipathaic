@@ -389,8 +389,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## Issues and Support
 
-- **Report bugs**: https://github.com/mobuobi/multipathaic.git/issues
-- **Request features**: https://github.com/mobuobi/multipathaic.git/issues
+- **Report bugs**: https://github.com/mobuobi/multipathaic/issues
+- **Request features**: https://github.com/mobuobi/multipathaic/issues
 - **View documentation**: `?multipathaic` or `help(package = "multipathaic")`
 
 ---

@@ -3,9 +3,7 @@ Type: Package
 Title: Multi-Path Stepwise Selection with AIC
 Version: 0.1.0
 Authors@R: c(
-    person("Michael", "Obuobi", email = "mio0011@auburn.edu", role = c("aut", "cre")),
-    person("Jinchen", "Jiang", role = "aut"),
-    person("Far", "Rahmati", role = "aut"))
+    person("Michael", "Obuobi", email = "mio0011@auburn.edu", role = c("aut", "cre"))
 Description: Implements a multi-path forward selection algorithm using the Akaike 
     Information Criterion (AIC) for both linear (Gaussian) and logistic (binomial) 
     regression models. Unlike traditional stepwise methods that follow a single path, 

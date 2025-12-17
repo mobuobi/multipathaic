@@ -1,6 +1,6 @@
 ---
 title: "Multi-Path AIC Selection: Diabetes Progression Analysis"
-author: "Michael Obuobi, Jinchen Jiang, Farkhonda Rahmati"
+author: "Michael Obuobi"
 date: "`r Sys.Date()`"
 output:
   html_document:
