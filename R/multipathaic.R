@@ -674,7 +674,7 @@ plausible_models <- function(forest,
 #' beta <- c(2, -1, 0, 0, 1, 0)
 #' y <- as.numeric(as.matrix(X) %*% beta + rnorm(n))
 #'
-#' result <- multipathaic(
+#' result <- multipath_aic(
 #'   X, y,
 #'   family = "gaussian",
 #'   K = 6,
@@ -696,7 +696,7 @@ plausible_models <- function(forest,
 #' prob <- 1 / (1 + exp(-eta))
 #' y <- rbinom(n, 1, prob)
 #'
-#' result <- multipathaic(
+#' result <- multipath_aic(
 #'   X, y,
 #'   family = "binomial",
 #'   K = 6,
@@ -705,7 +705,7 @@ plausible_models <- function(forest,
 #' )
 #'
 #' @export
-multipathaic <- function(
+multipath_aic <- function(
     X, y,
     family = c("gaussian", "binomial"),
     K = min(ncol(X), 10),
@@ -779,11 +779,11 @@ multipathaic <- function(
 #' **logistic regression model** selected by the Multi-Path AIC procedure.
 #'
 #' This function extracts a model from the set of plausible models produced by
-#' [`multipathaic()`], refits the logistic regression on the original
+#' [`multipath_aic()`], refits the logistic regression on the original
 #' data, and evaluates its predictive performance at a user-specified cutoff.
 #'
 #' @param result_object The full output list returned by
-#'   [`multipathaic()`]. Must contain `forest` and `plaus`.
+#'   [`multipath_aic()`]. Must contain `forest` and `plaus`.
 #' @param model_index Integer index specifying which plausible model to evaluate.
 #'   Default is `1` (the top plausible model).
 #' @param cutoff Probability threshold for classification. Default: `0.5`.
@@ -822,7 +822,7 @@ multipathaic <- function(
 #' prob <- 1 / (1 + exp(-eta))
 #' y <- rbinom(n, 1, prob)
 #'
-#' result <- multipathaic(
+#' result <- multipath_aic(
 #'   X, y,
 #'   family = "binomial",
 #'   K = 6,
@@ -837,7 +837,7 @@ multipathaic <- function(
 confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verbose = TRUE) {
   # --- Input checks ---
   if (is.null(result_object$plaus$plausible_models)) {
-    stop("Result object must come from multipathaic().")
+    stop("Result object must come from multipath_aic().")
   }
 
   plausible_set <- result_object$plaus$plausible_models
