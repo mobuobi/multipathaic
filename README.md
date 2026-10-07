@@ -4,7 +4,7 @@ Multi-path AIC selection for linear and logistic regression with stability-based
 
 ## Quick Links
 
-- **[Function Reference](function_reference.md)** - Complete API documentation
+- **[Function Reference](https://github.com/mobuobi/multipathaic/blob/main/function_reference.md)** - Complete API documentation
 - **[Method Vignette](vignettes/method_vignette.Rmd)** - Detailed methodology
 - **[Diabetes Analysis](vignettes/diabetes-analysis.Rmd)** - Case study demonstration
 
@@ -385,7 +385,7 @@ If you use this package, please cite:
 ```
 Obuobi, M. (2025). multipathaic: Multi-Path Stepwise 
 Selection with AIC. R package version 0.1.1. 
-https://github.com/mobuobi/multipathaic.git
+https://github.com/mobuobi/multipathaic
 ```
 
 ## References

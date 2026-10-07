@@ -13,7 +13,7 @@ plausible_models(forest, pi = NULL, Delta = 2, tau = 0.6, verbose = TRUE)
 (from `stability()$pi`). Default: `NULL`.}
 
 \item{Delta}{AIC tolerance \eqn{\Delta} defining the plausible region.
-Models with AIC ≤ (best AIC + Delta) are kept. Default: `2`.}
+Models with AIC less than or equal to (best AIC + Delta) are kept. Default: `2`.}
 
 \item{tau}{Minimum average model stability \eqn{\tau} required to retain
 a model (if stability scores supplied). Default: `0.6`.}
@@ -89,4 +89,3 @@ plaus <- plausible_models(
 )
 
 }
-

@@ -482,7 +482,7 @@ stability <- function(X, y,
 #' @param pi Optional named vector of per-variable stability values
 #'   (from `stability()$pi`). Default: `NULL`.
 #' @param Delta AIC tolerance \eqn{\Delta} defining the plausible region.
-#'   Models with AIC ≤ (best AIC + Delta) are kept. Default: `2`.
+#'   Models with AIC less than or equal to (best AIC + Delta) are kept. Default: `2`.
 #' @param tau Minimum average model stability \eqn{\tau} required to retain
 #'   a model (if stability scores supplied). Default: `0.6`.
 #' @param verbose Logical. If TRUE, prints detailed progress and summaries. Default: TRUE.
@@ -954,4 +954,3 @@ confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verb
 
   invisible(metrics)
 }
-
