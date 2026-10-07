@@ -18,7 +18,7 @@ build_paths(
 }
 \arguments{
 \item{X}{A data frame or matrix of predictors. All predictors must be numeric
-or convertible to numeric.}
+with finite values; encode categorical predictors explicitly.}
 
 \item{y}{A numeric response vector. For `family = "binomial"`, must be 0/1.}
 
@@ -49,7 +49,7 @@ A list containing:
 \describe{
   \item{path_forest}{List with `frontiers` component containing models at each step.}
   \item{aic_by_model}{Named list of AIC values indexed by model key.}
-  \item{all_models}{A combined data frame of all models explored across
+  \item{all_models}{A combined data frame of retained models across
     all steps, sorted by size and AIC.}
   \item{meta}{A list of the parameters used (`K`, `eps`, `delta`,
     `L`, and `family`).}
@@ -79,7 +79,11 @@ For each parent model:
   variable sets.
 
 The algorithm stops early if no parent produces an improved child.
+
+
+All candidate models use the same rows. Missing or non-finite inputs are rejected. Failed, non-finite, saturated, and nonconverged or boundary logistic fits are excluded. The search is a bounded heuristic, not exhaustive best-subset selection. Models are cached by variable set. The model list is authoritative; keys escape percent and pipe characters.
 }
+
 \examples{
 ## Linear regression example
 set.seed(1)
@@ -113,3 +117,4 @@ forest <- build_paths(
 )
 
 }
+

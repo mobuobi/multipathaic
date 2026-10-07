@@ -37,7 +37,7 @@ to expand. Default: `1e-6`.}
 \item{B}{Number of resamples for stability estimation. Default: 100.}
 
 \item{resample_fraction}{Fraction of the dataset used per resample
-(bootstrap or subsample). Default: `0.8`.}
+(sampling with replacement). Default: `0.8`.}
 
 \item{verbose}{Logical. If TRUE, prints progress for each resample. Default: TRUE.}
 }
@@ -46,7 +46,7 @@ A list with:
 \describe{
   \item{pi}{Named vector of stability scores, sorted decreasing.}
   \item{pi_sum}{Running sum used to compute pi (for diagnostic purposes).}
-  \item{B}{Number of completed resample iterations.}
+  \item{B}{Number of successful resamples used as the denominator. See also B_requested and failures.}
   \item{call}{The matched function call.}
 }
 }
@@ -54,11 +54,12 @@ A list with:
 Computes variable-selection stability by repeatedly resampling the data
 and applying the `build_paths()` algorithm.
 
-For each bootstrap or subsample replicate, the function runs the
+For each bootstrap replicate (sampling rows with replacement), the function runs the
 multi-path forward-selection search, extracts the variables appearing in the
 final step of the search path, and computes the proportion of models containing
 each variable (z_j^(b)). The stability score is the average of these proportions
-across all resamples.
+across successful resamples. This is the mean within-frontier inclusion fraction,
+not the fraction of resamples selecting a variable at least once.
 
 Stability is defined as:
 \deqn{ \pi_j = \frac{1}{B} \sum_{b=1}^{B} z_j^{(b)} }
@@ -68,10 +69,15 @@ where z_j^(b) is the proportion of models in resample b that contain variable j.
 Each resampled dataset is fit using the same multi-path forward-selection
 procedure as in Algorithm 1. For each resample, the proportion of models
 containing each variable is computed (z_j^(b)), and these proportions are
-averaged across all B resamples to obtain the final stability scores (pi_j).
+averaged across successful resamples to obtain the final stability scores (pi_j).
 
-When a resample fails (e.g., due to singularities), it is skipped with a warning.
+Failed resamples are excluded from the denominator and reported with a warning.
+All-failed runs raise an error. Valid intercept-only runs contribute zero scores.
+
+
+Only the deepest retained frontier contributes in each successful replicate; earlier terminal branches are not included. B_requested records attempted draws and failures records error messages. Increasing B reduces Monte Carlo noise but does not establish variable importance or false-discovery control.
 }
+
 \examples{
 ## Linear regression example
 set.seed(123)
@@ -107,3 +113,4 @@ stab <- stability(
 )
 
 }
+

@@ -64,7 +64,7 @@ It combines the three main components:
 }
 
 The output contains all intermediate results and the final set of
-plausible, stable models, along with the full search record and variable
+plausible, stable models, along with the retained-model search record and variable
 stability summaries.
 }
 \details{
@@ -124,3 +124,4 @@ result <- multipath_aic(
 )
 
 }
+

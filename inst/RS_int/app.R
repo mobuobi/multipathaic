@@ -59,6 +59,15 @@ ui <- dashboardPage(
         }
         .small-box {
           border-radius: 10px;
+          min-height: 120px;
+        }
+        .small-box h3 { font-size: clamp(24px, 3vw, 38px); }
+        @media (min-width: 768px) and (max-width: 1100px) {
+          .content .row > .col-sm-3 { width: 50%; }
+          .content .row > .col-sm-6 { width: 100%; }
+        }
+        @media (max-width: 767px) {
+          .small-box { min-height: 100px; }
         }
         .info-box {
           min-height: 90px;
@@ -281,6 +290,8 @@ ui <- dashboardPage(
             solidHeader = TRUE,
             width = 12,
 
+            numericInput("analysis_seed", "Analysis seed:", value = 123, min = 0, max = 2147483647, step = 1),
+            helpText("Repeat a run with the same data, settings, and seed to reproduce bootstrap results."),
             actionButton("run", "Run Multi-Path AIC Analysis",
                          class = "btn-warning btn-lg btn-block",
                          icon = icon("rocket")),
@@ -354,7 +365,7 @@ ui <- dashboardPage(
           ),
 
           box(
-            title = "Variable Inclusion Probabilities",
+            title = "Variable Inclusion Fractions",
             status = "success",
             solidHeader = TRUE,
             width = 6,
@@ -384,6 +395,7 @@ ui <- dashboardPage(
       # ==================== Enhanced Diagnostics Tab ====================
       tabItem(
         tabName = "diagnostics",
+        tags$div(class = "alert alert-info", "Plots and cards below describe the training data. Use the test-set section for held-out evaluation. Test R² uses 1 − SSE/SST and can be negative."),
 
         # ========== NEW: TEST SET EVALUATION BOX ==========
         fluidRow(
@@ -540,7 +552,7 @@ ui <- dashboardPage(
               tags$li(code("plotly"), " - Interactive plots"),
               tags$li(code("DT"), " - Interactive tables"),
               tags$li(code("ggplot2"), " - Static plots"),
-              tags$li(code("readxl"), " - Excel file support (auto-installed if needed)")
+              tags$li(code("readxl"), " - Excel file support (optional installation)")
             ),
             p("Install all at once:"),
             pre('install.packages(c("shiny", "shinydashboard", "plotly", "DT", "ggplot2", "readxl"))'),
@@ -564,46 +576,45 @@ ui <- dashboardPage(
 # ==================== Server Logic ====================
 server <- function(input, output, session) {
 
-  convert_to_numeric <- function(X, y) {
-    tryCatch({
-      # Convert response to numeric if it's categorical
-      if (is.character(y) || is.factor(y)) {
-        y <- as.numeric(as.factor(y)) - 1  # Convert to 0/1 for binary
-      }
+  roc_summary <- function(y, probabilities) {
+    if (length(unique(y)) != 2L) stop("ROC requires both outcome classes.")
+    thresholds <- c(Inf, sort(unique(probabilities), decreasing = TRUE), -Inf)
+    curve <- do.call(rbind, lapply(thresholds, function(t) {
+      predicted <- probabilities >= t
+      data.frame(FPR = mean(predicted[y == 0]), TPR = mean(predicted[y == 1]))
+    }))
+    auc <- sum(diff(curve$FPR) * (head(curve$TPR, -1) + tail(curve$TPR, -1)) / 2)
+    list(curve = curve, auc = auc)
+  }
 
-      # Process each predictor column
-      X_numeric <- as.data.frame(lapply(X, function(col) {
-        if (is.numeric(col)) {
-          return(col)
-        } else if (is.character(col) || is.factor(col)) {
-          # Check if binary (Yes/No, Male/Female, etc.)
-          unique_vals <- unique(na.omit(col))
-          if (length(unique_vals) == 2) {
-            # Binary variable: convert to 0/1
-            return(as.numeric(as.factor(col)) - 1)
-          } else if (length(unique_vals) <= 5) {
-            # Few categories: convert to numeric
-            return(as.numeric(as.factor(col)) - 1)
-          } else {
-            # Many categories: skip this variable
-            return(NULL)
-          }
-        } else {
-          return(as.numeric(col))
-        }
-      }))
-
-      # Remove NULL columns
-      X_numeric <- X_numeric[, !sapply(X_numeric, is.null), drop = FALSE]
-
-      # Ensure all columns are numeric
-      X_numeric <- as.data.frame(lapply(X_numeric, as.numeric))
-
-      return(list(X = X_numeric, y = as.numeric(y)))
-
-    }, error = function(e) {
-      stop(paste("Error converting data to numeric:", e$message))
-    })
+  convert_to_numeric <- function(X, y, family) {
+    if (family == "gaussian" && !is.numeric(y))
+      stop("A Gaussian response must be numeric; it cannot be category codes.")
+    if (family == "binomial" && (is.character(y) || is.factor(y))) {
+      levels_y <- sort(unique(as.character(y[!is.na(y)])))
+      if (length(levels_y) != 2L) stop("Choose a response with exactly two classes.")
+      y <- match(as.character(y), levels_y) - 1L
+      showNotification(paste("Response coding:", levels_y[1], "= 0;", levels_y[2], "= 1"), duration = 10)
+    }
+    X <- as.data.frame(lapply(X, function(col) {
+      if (is.numeric(col)) return(col)
+      if (is.logical(col)) return(as.numeric(col))
+      stop("Predictors must be numeric. Encode categorical predictors explicitly before upload; categories are not ordered numbers.")
+    }), check.names = FALSE)
+    # Reserve y for diagnostic formulas and preserve a visible name mapping.
+    names(X) <- make.names(names(X), unique = TRUE)
+    if ("y" %in% names(X)) {
+      names(X) <- make.unique(c("y", names(X)))[-1L]
+      showNotification("Predictor 'y' renamed to avoid a response-name collision.", duration = 8)
+    }
+    if (!is.numeric(y)) stop("Response must be numeric or a binary category.")
+    good <- is.finite(y) & apply(is.finite(as.matrix(X)), 1, all)
+    if (any(!good)) showNotification(paste("Removed", sum(!good), "rows with missing or non-finite selected values."), duration = 10)
+    X <- X[good, , drop = FALSE]; y <- y[good]
+    if (nrow(X) < 3L) stop("At least three complete observations are required.")
+    if (family == "binomial" && (!all(y %in% c(0, 1)) || length(unique(y)) != 2L))
+      stop("Binomial response must contain both 0 and 1.")
+    list(X = X, y = y)
   }
 
   # Reactive values
@@ -617,8 +628,21 @@ server <- function(input, output, session) {
     y_test = NULL,    # NEW
     result = NULL,
     run_time = NULL,
+    run_params = NULL,
     family = "gaussian"
   )
+
+  reset_analysis <- function(clear_data = FALSE) {
+    rv$X_train <- rv$X_test <- rv$y_train <- rv$y_test <- NULL
+    rv$result <- rv$run_time <- rv$run_params <- NULL
+    if (clear_data) rv$X <- rv$y <- NULL
+  }
+  observeEvent(list(input$data_source, input$family, input$upload_family), {
+    reset_analysis(clear_data = TRUE)
+  }, ignoreInit = TRUE, priority = 100)
+  observeEvent(list(input$response_var, input$predictor_vars), {
+    if (identical(input$data_source, "upload")) reset_analysis(clear_data = TRUE)
+  }, ignoreInit = TRUE, priority = 100)
 
   # File type detection
   file_type <- reactiveVal("none")
@@ -636,16 +660,11 @@ server <- function(input, output, session) {
     if (file_ext %in% c("xlsx", "xls")) {
       # Check if readxl is available
       if (!requireNamespace("readxl", quietly = TRUE)) {
-        showNotification(
-          "Installing 'readxl' package for Excel support...",
-          type = "warning",
-          duration = 5
-        )
-        install.packages("readxl")
+        stop("Excel support requires readxl. Install it with install.packages(\"readxl\") before loading the file.")
       }
 
       library(readxl)
-      df <- read_excel(file_path, sheet = sheet)
+      df <- read_excel(file_path, sheet = sheet, col_names = header)
       df <- as.data.frame(df)
 
       # Clean column names
@@ -668,6 +687,7 @@ server <- function(input, output, session) {
 
   # ==================== Generate Synthetic Data ====================
   observeEvent(input$generate_data, {
+    reset_analysis(clear_data = TRUE)
     set.seed(123)
     n <- input$n_obs
     p <- input$n_pred
@@ -676,7 +696,7 @@ server <- function(input, output, session) {
 
     if (input$family == "gaussian") {
       beta <- c(2, -1.5, 1, rep(0, max(0, p-3)))
-      y <- as.numeric(as.matrix(X) %*% beta + rnorm(n, 1))
+      y <- as.numeric(as.matrix(X) %*% beta + rnorm(n))
     } else {
       n_important <- min(3, p)
       coefs <- rep(0, p)
@@ -727,6 +747,7 @@ server <- function(input, output, session) {
 
   # ==================== Upload and Read Data ====================
   observeEvent(input$data_file, {
+    reset_analysis(clear_data = TRUE)
     req(input$data_file)
 
     tryCatch({
@@ -738,13 +759,8 @@ server <- function(input, output, session) {
         file_type("excel")
 
         if (!requireNamespace("readxl", quietly = TRUE)) {
-          showNotification(
-            "Installing 'readxl' package...",
-            type = "warning",
-            duration = 5
-          )
-          install.packages("readxl")
-        }
+        stop("Excel support requires readxl. Install it with install.packages(\"readxl\") before loading the file.")
+      }
 
         library(readxl)
 
@@ -761,7 +777,7 @@ server <- function(input, output, session) {
         }
 
         # Read first sheet by default
-        df <- read_excel(file_path, sheet = 1)
+        df <- read_excel(file_path, sheet = 1, col_names = input$header)
         df <- as.data.frame(df)
         names(df) <- make.names(names(df), unique = TRUE)
 
@@ -795,6 +811,7 @@ server <- function(input, output, session) {
 
   # ==================== Update Data When Excel Sheet Changes ====================
   observeEvent(input$excel_sheet, {
+    reset_analysis(clear_data = TRUE)
     req(input$data_file, input$excel_sheet)
     req(file_type() == "excel")
 
@@ -803,7 +820,7 @@ server <- function(input, output, session) {
 
       df <- read_excel(
         input$data_file$datapath,
-        sheet = input$excel_sheet
+        sheet = input$excel_sheet, col_names = input$header
       )
       df <- as.data.frame(df)
       names(df) <- make.names(names(df), unique = TRUE)
@@ -826,6 +843,7 @@ server <- function(input, output, session) {
 
   # ==================== Refresh Data Button ====================
   observeEvent(input$refresh_data, {
+    reset_analysis(clear_data = TRUE)
     req(input$data_file)
 
     showNotification("Refreshing data...", type = "message", duration = 2)
@@ -837,7 +855,7 @@ server <- function(input, output, session) {
       if (file_ext %in% c("xlsx", "xls")) {
         library(readxl)
         sheet_to_use <- if (!is.null(input$excel_sheet)) input$excel_sheet else 1
-        df <- read_excel(file_path, sheet = sheet_to_use)
+        df <- read_excel(file_path, sheet = sheet_to_use, col_names = input$header)
         df <- as.data.frame(df)
         names(df) <- make.names(names(df), unique = TRUE)
       } else {
@@ -877,31 +895,22 @@ server <- function(input, output, session) {
 
   # ==================== Confirm Variable Selection ====================
   observeEvent(input$confirm_vars, {
+    reset_analysis(clear_data = TRUE)
     req(rv$data, input$response_var, input$predictor_vars)
 
     tryCatch({
+      if (input$response_var %in% input$predictor_vars) stop("The response cannot also be a predictor.")
       y_raw <- rv$data[[input$response_var]]
       X_raw <- rv$data[, input$predictor_vars, drop = FALSE]
 
       # Convert to numeric
-      converted <- convert_to_numeric(X_raw, y_raw)
+      converted <- convert_to_numeric(X_raw, y_raw, input$upload_family)
 
       rv$X <- converted$X
       rv$y <- converted$y
       rv$family <- input$upload_family
 
-      # Notify user about conversions
-      n_converted <- sum(sapply(X_raw, function(col) !is.numeric(col)))
-
-      if (n_converted > 0) {
-        showNotification(
-          paste("Converted", n_converted, "categorical variable(s) to numeric (0/1 coding)"),
-          type = "message",
-          duration = 5
-        )
-      } else {
-        showNotification("Variables selected!", type = "message", duration = 3)
-      }
+      showNotification("Variables selected and validated!", type = "message", duration = 3)
 
     }, error = function(e) {
       showNotification(
@@ -916,6 +925,7 @@ server <- function(input, output, session) {
   # ==================== Apply Feature Engineering & Split ====================
   observeEvent(input$apply_features, {
     req(rv$X, rv$y)
+    reset_analysis()
 
     tryCatch({
       X_processed <- rv$X
@@ -927,6 +937,7 @@ server <- function(input, output, session) {
 
         # Create all pairwise interactions
         n_orig <- ncol(X_processed)
+        if (n_orig < 2L) stop("Interaction terms require at least two predictors.")
         interaction_data <- list()
 
         for (i in 1:(n_orig-1)) {
@@ -939,6 +950,7 @@ server <- function(input, output, session) {
 
         # Combine original and interactions
         X_processed <- cbind(X_processed, as.data.frame(interaction_data))
+        names(X_processed) <- make.names(names(X_processed), unique = TRUE)
 
         showNotification(
           paste("Added", length(interaction_data), "interaction terms"),
@@ -950,7 +962,11 @@ server <- function(input, output, session) {
       set.seed(123)
       n <- nrow(X_processed)
       train_size <- floor(n * input$train_pct / 100)
-      train_idx <- sample(1:n, train_size)
+      train_idx <- if (rv$family == "binomial") {
+        groups <- split(seq_len(n), rv$y)
+        if (any(lengths(groups) < 2L)) stop("Each class needs at least two observations for a stratified split.")
+        unlist(lapply(groups, function(g) sample(g, min(length(g) - 1L, max(1L, floor(length(g) * input$train_pct / 100))))), use.names = FALSE)
+      } else sample(seq_len(n), train_size)
 
       rv$X_train <- X_processed[train_idx, , drop = FALSE]
       rv$X_test <- X_processed[-train_idx, , drop = FALSE]
@@ -1015,6 +1031,9 @@ server <- function(input, output, session) {
 
     req(X_to_use, y_to_use)
 
+    rv$result <- rv$run_params <- NULL
+    tryCatch({
+    set.seed(input$analysis_seed)
     withProgress(message = 'Running Multi-Path AIC...', value = 0, {
 
       incProgress(0.2, detail = "Building paths...")
@@ -1038,11 +1057,13 @@ server <- function(input, output, session) {
       end_time <- Sys.time()
       rv$run_time <- as.numeric(difftime(end_time, start_time, units = "secs"))
       rv$result <- result
+      rv$run_params <- list(K=input$K, delta=input$delta, L=input$L, B=input$B, Delta=input$Delta, tau=input$tau, seed=input$analysis_seed)
 
       incProgress(1, detail = "Complete!")
     })
 
     showNotification("Analysis complete!", type = "message", duration = 5)
+    }, error = function(e) showNotification(paste("Analysis failed:", conditionMessage(e)), type = "error", duration = NULL))
   })
 
 
@@ -1054,7 +1075,8 @@ server <- function(input, output, session) {
           class = "alert alert-success",
           icon("check-circle"),
           strong(" Success! "),
-          "Analysis completed in ", round(rv$run_time, 1), " seconds."
+          "Analysis completed in ", round(rv$run_time, 1), " seconds. Results use the settings saved at run time; rerun after changing parameters. ",
+          rv$result$stab$B, " / ", rv$result$stab$B_requested, " bootstrap resamples succeeded."
         )
       )
     }
@@ -1118,8 +1140,8 @@ server <- function(input, output, session) {
 
     p <- ggplot(df, aes(x = Variable, y = Stability)) +
       geom_col(aes(fill = Stability)) +
-      geom_hline(yintercept = input$tau, linetype = "dashed",
-                 color = "red", size = 1) +
+      geom_hline(yintercept = rv$run_params$tau, linetype = "dashed",
+                 color = "red", linewidth = 1) +
       scale_fill_gradient(low = "lightblue", high = "darkblue") +
       labs(title = NULL,
            x = "Variable", y = "Stability Score (π)") +
@@ -1135,15 +1157,15 @@ server <- function(input, output, session) {
     req(rv$result)
 
     frontiers <- rv$result$forest$path_forest$frontiers
-    n_models <- sapply(frontiers, nrow)
+    n_models <- vapply(frontiers, nrow, integer(1))
 
     df <- data.frame(
-      Step = 1:length(n_models),
+      Step = seq_along(n_models),
       Models = n_models
     )
 
     ggplot(df, aes(x = Step, y = Models)) +
-      geom_line(color = "steelblue", size = 1.5) +
+      geom_line(color = "steelblue", linewidth = 1.0) +
       geom_point(color = "steelblue", size = 4) +
       geom_area(alpha = 0.3, fill = "steelblue") +
       labs(title = NULL,
@@ -1185,16 +1207,16 @@ server <- function(input, output, session) {
     display_df <- data.frame(
       Model_ID = seq_len(nrow(plaus)),
       AIC = round(plaus$AIC, 2),
-      Variables = sapply(plaus$model, function(x) paste(x, collapse = ", ")),
+      Variables = vapply(plaus$model, function(x) if (length(x)) paste(x, collapse = ", ") else "(intercept only)", character(1)),
       Avg_Stability = round(plaus$avg_stability, 3),
-      N_Vars = sapply(plaus$model, length)
+      N_Vars = lengths(plaus$model)
     )
 
     datatable(display_df,
               options = list(pageLength = 10, scrollX = TRUE),
               rownames = FALSE) %>%
       formatStyle('Avg_Stability',
-                  background = styleColorBar(range(display_df$Avg_Stability), 'lightgreen'),
+                  background = styleColorBar(c(0, 1), 'lightgreen'),
                   backgroundSize = '100% 90%',
                   backgroundRepeat = 'no-repeat',
                   backgroundPosition = 'center')
@@ -1207,7 +1229,7 @@ server <- function(input, output, session) {
     plaus <- rv$result$plaus$plausible_models
 
     if (nrow(plaus) < 2) {
-      return(plotly_empty() %>%
+      return(plotly_empty(type = "scatter", mode = "markers") %>%
                layout(title = "Need at least 2 plausible models"))
     }
 
@@ -1222,7 +1244,7 @@ server <- function(input, output, session) {
         vars_j <- plaus_subset$model[[j]]
 
         if (length(vars_i) == 0 || length(vars_j) == 0) {
-          overlap_matrix[i, j] <- 0
+          overlap_matrix[i, j] <- if (length(vars_i) == 0 && length(vars_j) == 0) 1 else 0
         } else {
           overlap <- length(intersect(vars_i, vars_j)) /
             length(union(vars_i, vars_j))
@@ -1253,6 +1275,7 @@ server <- function(input, output, session) {
     req(rv$result)
 
     inclusion <- rv$result$plaus$inclusion
+    if (!length(inclusion)) return(plotly_empty(type = "scatter", mode = "markers") %>% layout(title = "No predictor inclusion to display"))
     df <- data.frame(
       Variable = names(inclusion),
       Inclusion = as.numeric(inclusion)
@@ -1263,10 +1286,10 @@ server <- function(input, output, session) {
     p <- ggplot(df, aes(x = Variable, y = Inclusion)) +
       geom_col(aes(fill = Inclusion)) +
       geom_hline(yintercept = 1, linetype = "dashed",
-                 color = "darkgreen", size = 1) +
+                 color = "darkgreen", linewidth = 1) +
       scale_fill_gradient(low = "lightgreen", high = "darkgreen") +
       labs(title = NULL,
-           x = "Variable", y = "Inclusion Probability") +
+           x = "Variable", y = "Fraction of Plausible Models") +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
@@ -1279,10 +1302,11 @@ server <- function(input, output, session) {
 
     frontiers <- rv$result$forest$path_forest$frontiers
 
+    if (!length(frontiers)) return(plotly_empty(type = "scatter", mode = "markers") %>% layout(title = "Only the intercept model was retained"))
     all_models_list <- list()
     for (step in seq_along(frontiers)) {
       frontier <- frontiers[[step]]
-      for (i in 1:min(nrow(frontier), 30)) {
+      for (i in seq_len(min(nrow(frontier), 30))) {
         all_models_list[[length(all_models_list) + 1]] <- list(
           step = step,
           aic = frontier$AIC[i],
@@ -1332,13 +1356,13 @@ server <- function(input, output, session) {
     req(rv$result)
 
     frontiers <- rv$result$forest$path_forest$frontiers
-    total_models <- sum(sapply(frontiers, nrow))
+    total_models <- sum(vapply(frontiers, nrow, integer(1)))
 
     tags$div(
       class = "alert alert-info",
       icon("info-circle"),
       strong(" Info: "),
-      "Total unique models explored: ", total_models, " | ",
+      "Total retained models: ", total_models, " | ",
       "Final step: ", length(frontiers), " | ",
       "Point size indicates number of variables"
     )
@@ -1413,7 +1437,7 @@ server <- function(input, output, session) {
         return(NULL)
       }
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- glm(form, data = df_clean, family = binomial())
 
       p_hat <- predict(model, type = "response")
@@ -1428,12 +1452,12 @@ server <- function(input, output, session) {
       conf_df <- data.frame(
         Predicted = rep(c("Positive", "Negative"), each = 2),
         Actual = rep(c("Positive", "Negative"), 2),
-        Count = c(TP, FN, FP, TN),
-        Label = c("TP", "FN", "FP", "TN")
+        Count = c(TP, FP, FN, TN),
+        Label = c("TP", "FP", "FN", "TN")
       )
 
       ggplot(conf_df, aes(x = Actual, y = Predicted, fill = Count)) +
-        geom_tile(color = "white", size = 2) +
+        geom_tile(color = "white", linewidth = 2) +
         geom_text(aes(label = paste0(Label, "\n", Count)),
                   size = 12, color = "white", fontface = "bold") +
         scale_fill_gradient(low = "#3498db", high = "#e74c3c") +
@@ -1468,7 +1492,7 @@ server <- function(input, output, session) {
       df <- data.frame(y = y, X)
       df_clean <- na.omit(df)
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- glm(form, data = df_clean, family = binomial())
 
       p_hat <- predict(model, type = "response")
@@ -1481,9 +1505,9 @@ server <- function(input, output, session) {
       FN <- sum(y_pred == 0 & y_actual == 1)
 
       accuracy <- (TP + TN) / (TP + TN + FP + FN)
-      sensitivity <- TP / (TP + FN + 1e-8)
-      specificity <- TN / (TN + FP + 1e-8)
-      precision <- TP / (TP + FP + 1e-8)
+      sensitivity <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+      specificity <- if ((TN + FP) > 0) TN / (TN + FP) else NA_real_
+      precision <- if ((TP + FP) > 0) TP / (TP + FP) else NA_real_
 
       tagList(
         infoBox(
@@ -1548,31 +1572,18 @@ server <- function(input, output, session) {
       df <- data.frame(y = y, X)
       df_clean <- na.omit(df)
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- glm(form, data = df_clean, family = binomial())
 
       p_hat <- predict(model, type = "response")
       y_actual <- df_clean$y
 
-      thresholds <- seq(0, 1, by = 0.01)
-      roc_data <- lapply(thresholds, function(t) {
-        y_pred <- ifelse(p_hat >= t, 1, 0)
-        TP <- sum(y_pred == 1 & y_actual == 1)
-        TN <- sum(y_pred == 0 & y_actual == 0)
-        FP <- sum(y_pred == 1 & y_actual == 0)
-        FN <- sum(y_pred == 0 & y_actual == 1)
-
-        tpr <- TP / (TP + FN + 1e-8)
-        fpr <- FP / (FP + TN + 1e-8)
-
-        data.frame(FPR = fpr, TPR = tpr)
-      })
-      roc_df <- do.call(rbind, roc_data)
-
-      auc <- abs(sum(diff(roc_df$FPR) * (head(roc_df$TPR, -1) + tail(roc_df$TPR, -1)) / 2))
+      roc <- roc_summary(y_actual, p_hat)
+      roc_df <- roc$curve
+      auc <- roc$auc
 
       ggplot(roc_df, aes(x = FPR, y = TPR)) +
-        geom_line(color = "#e74c3c", size = 2) +
+        geom_path(color = "#e74c3c", linewidth = 1.2) +
         geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray") +
         annotate("text", x = 0.7, y = 0.3,
                  label = paste("AUC =", round(auc, 3)),
@@ -1607,7 +1618,7 @@ server <- function(input, output, session) {
       df <- data.frame(y = y, X)
       df_clean <- na.omit(df)
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- glm(form, data = df_clean, family = binomial())
 
       p_hat <- predict(model, type = "response")
@@ -1620,7 +1631,7 @@ server <- function(input, output, session) {
 
       ggplot(pred_df, aes(x = Probability, fill = Actual)) +
         geom_histogram(alpha = 0.7, bins = 30, position = "identity") +
-        geom_vline(xintercept = 0.5, linetype = "dashed", color = "red", size = 1) +
+        geom_vline(xintercept = 0.5, linetype = "dashed", color = "red", linewidth = 1) +
         scale_fill_manual(values = c("#3498db", "#e74c3c")) +
         labs(title = "Predicted Probability Distribution",
              x = "Predicted Probability",
@@ -1653,7 +1664,7 @@ server <- function(input, output, session) {
       df <- data.frame(y = y, X)
       df <- na.omit(df)  # Remove rows with missing values
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- lm(form, data = df)
 
       residuals_vals <- residuals(model)
@@ -1666,8 +1677,8 @@ server <- function(input, output, session) {
 
       ggplot(resid_df, aes(x = Fitted, y = Residuals)) +
         geom_point(alpha = 0.6, color = "#3498db", size = 2) +
-        geom_hline(yintercept = 0, linetype = "dashed", color = "red", size = 1) +
-        geom_smooth(method = "loess", se = TRUE, color = "#e74c3c", fill = "#e74c3c", alpha = 0.2) +
+        geom_hline(yintercept = 0, linetype = "dashed", color = "red", linewidth = 1) +
+        (if (length(unique(signif(fitted_vals, 8))) >= 5L) geom_smooth(method = "loess", se = TRUE, color = "#e74c3c", fill = "#e74c3c", alpha = 0.2)) +
         labs(title = "Residual Plot",
              x = "Fitted Values",
              y = "Residuals") +
@@ -1704,7 +1715,7 @@ server <- function(input, output, session) {
         return(NULL)
       }
 
-      form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
+      form <- if (length(selected_vars)) reformulate(selected_vars, response = "y") else y ~ 1
       model <- lm(form, data = df_clean)
 
       # Now both y and predictions have the same length
@@ -1723,7 +1734,7 @@ server <- function(input, output, session) {
       ggplot(pred_df, aes(x = Actual, y = Predicted)) +
         geom_point(alpha = 0.6, color = "#3498db", size = 3) +
         geom_abline(intercept = 0, slope = 1, linetype = "dashed",
-                    color = "red", size = 1) +
+                    color = "red", linewidth = 1) +
         geom_smooth(method = "lm", se = TRUE, color = "#2ecc71",
                     fill = "#2ecc71", alpha = 0.2) +
         annotate("text",
@@ -1771,8 +1782,8 @@ server <- function(input, output, session) {
         "<h2>Data Summary</h2>",
         "<div class='metric'>",
         "<ul>",
-        "<li><strong>Observations:</strong> ", nrow(rv$X), "</li>",
-        "<li><strong>Predictors:</strong> ", ncol(rv$X), "</li>",
+        "<li><strong>Observations:</strong> ", nrow(rv$result$forest$model_data$X), "</li>",
+        "<li><strong>Predictors:</strong> ", ncol(rv$result$forest$model_data$X), "</li>",
         "<li><strong>Family:</strong> ", rv$family, "</li>",
         "</ul>",
         "</div>",
@@ -1780,15 +1791,17 @@ server <- function(input, output, session) {
         "<h2>Parameters Used</h2>",
         "<div class='metric'>",
         "<ul>",
-        "<li><strong>K (Max Steps):</strong> ", input$K, "</li>",
-        "<li><strong>δ (AIC Tolerance):</strong> ", input$delta, "</li>",
-        "<li><strong>L (Max Models/Step):</strong> ", input$L, "</li>",
-        "<li><strong>B (Resamples):</strong> ", input$B, "</li>",
-        "<li><strong>Δ (Plausibility):</strong> ", input$Delta, "</li>",
-        "<li><strong>τ (Stability):</strong> ", input$tau, "</li>",
+        "<li><strong>K (Max Steps):</strong> ", rv$run_params$K, "</li>",
+        "<li><strong>δ (AIC Tolerance):</strong> ", rv$run_params$delta, "</li>",
+        "<li><strong>L (Max Models/Step):</strong> ", rv$run_params$L, "</li>",
+        "<li><strong>B (Resamples):</strong> ", rv$run_params$B, "</li>",
+        "<li><strong>Δ (Plausibility):</strong> ", rv$run_params$Delta, "</li>",
+        "<li><strong>τ (Stability):</strong> ", rv$run_params$tau, "</li>",
         "</ul>",
         "</div>",
 
+        "<p><strong>Bootstrap seed:</strong> ", rv$run_params$seed, "</p>",
+        "<p><strong>Successful resamples:</strong> ", rv$result$stab$B, " / ", rv$result$stab$B_requested, "</p>",
         "<h2>Results Summary</h2>",
         "<div class='metric'>",
         "<ul>",
@@ -1805,13 +1818,13 @@ server <- function(input, output, session) {
       )
 
       plaus <- rv$result$plaus$plausible_models
-      for (i in 1:min(nrow(plaus), 10)) {
+      for (i in seq_len(min(nrow(plaus), 10))) {
         html_content <- paste0(
           html_content,
           "<tr>",
           "<td>", i, "</td>",
           "<td>", round(plaus$AIC[i], 2), "</td>",
-          "<td>", paste(plaus$model[[i]], collapse = ", "), "</td>",
+          "<td>", htmltools::htmlEscape(paste(plaus$model[[i]], collapse = ", ")), "</td>",
           "<td>", round(plaus$avg_stability[i], 3), "</td>",
           "<td>", length(plaus$model[[i]]), "</td>",
           "</tr>"
@@ -1828,12 +1841,12 @@ server <- function(input, output, session) {
       )
 
       top_vars <- head(sort(rv$result$stab$pi, decreasing = TRUE), 10)
-      for (i in 1:length(top_vars)) {
+      for (i in seq_along(top_vars)) {
         html_content <- paste0(
           html_content,
           "<tr>",
           "<td>", i, "</td>",
-          "<td>", names(top_vars)[i], "</td>",
+          "<td>", htmltools::htmlEscape(names(top_vars)[i]), "</td>",
           "<td>", round(top_vars[i], 3), "</td>",
           "</tr>"
         )
@@ -1845,8 +1858,8 @@ server <- function(input, output, session) {
 
         "<hr>",
         "<p><em>Report generated by multipathaic R package</em></p>",
-        "<p><em>GitHub: <a href='https://github.com/R-4-Data-Science/FinalProjectmultipathaic'>",
-        "github.com/R-4-Data-Science/FinalProjectmultipathaic</a></em></p>",
+        "<p><em>GitHub: <a href='https://github.com/mobuobi/multipathaic'>",
+        "github.com/mobuobi/multipathaic</a></em></p>",
         "</body></html>"
       )
 
@@ -1876,8 +1889,8 @@ server <- function(input, output, session) {
     best_vars <- plaus$model[[1]]
 
     # Use the training data we already have stored!
-    X_train <- if (!is.null(rv$X_train)) rv$X_train else rv$X
-    y_train <- if (!is.null(rv$y_train)) rv$y_train else rv$y
+    X_train <- rv$result$forest$model_data$X
+    y_train <- rv$result$forest$model_data$y
 
     train_df <- data.frame(y = y_train, X_train[, best_vars, drop = FALSE])
 
@@ -1892,7 +1905,9 @@ server <- function(input, output, session) {
       test_rmse <- sqrt(mean((rv$y_test - y_pred)^2))
       train_pred <- predict(model)
       train_rmse <- sqrt(mean((y_train - train_pred)^2))
-      test_cor <- cor(rv$y_test, y_pred)
+      test_cor <- if (stats::sd(y_pred) > 0 && stats::sd(rv$y_test) > 0) cor(rv$y_test, y_pred) else NA_real_
+      test_sst <- sum((rv$y_test - mean(rv$y_test))^2)
+      test_r2 <- if (test_sst > 0) 1 - sum((rv$y_test - y_pred)^2) / test_sst else NA_real_
 
       # Create table
       metrics_df <- data.frame(
@@ -1903,7 +1918,7 @@ server <- function(input, output, session) {
                   round(test_rmse, 3),
                   round(test_cor, 3),
                   round(summary(model)$r.squared, 3),
-                  round(test_cor^2, 3))
+                  round(test_r2, 3))
       )
 
     } else {  # binomial
@@ -1921,8 +1936,8 @@ server <- function(input, output, session) {
       FN <- sum(y_pred == 0 & rv$y_test == 1)
 
       accuracy <- (TP + TN) / (TP + TN + FP + FN)
-      sensitivity <- TP / (TP + FN + 1e-8)
-      specificity <- TN / (TN + FP + 1e-8)
+      sensitivity <- if ((TP + FN) > 0) TP / (TP + FN) else NA_real_
+      specificity <- if ((TN + FP) > 0) TN / (TN + FP) else NA_real_
 
       metrics_df <- data.frame(
         Metric = c("Variables Selected", "Test Accuracy", "Test Sensitivity",
@@ -1941,7 +1956,9 @@ server <- function(input, output, session) {
       tags$p(strong("Selected Variables: "),
              paste(best_vars, collapse = ", ")),
       hr(),
-      renderTable(metrics_df, striped = TRUE, hover = TRUE, bordered = TRUE)
+      tags$table(class = "table table-striped table-bordered",
+        tags$thead(tags$tr(lapply(names(metrics_df), tags$th))),
+        tags$tbody(lapply(seq_len(nrow(metrics_df)), function(i) tags$tr(lapply(metrics_df[i, ], tags$td)))))
     )
   })
 
@@ -1949,3 +1966,4 @@ server <- function(input, output, session) {
 
 # Run the application
 shinyApp(ui = ui, server = server)
+
