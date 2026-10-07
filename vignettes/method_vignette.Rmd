@@ -126,27 +126,25 @@ Output: Forest of model paths
           Create candidate M ∪ {x}
           Compute AIC(M ∪ {x})
    
-   b. Find best AIC:
-      AIC* = min{AIC over all candidates}
-   
-   c. Filter by AIC tolerance:
-      Keep candidates where AIC ≤ AIC* + delta
-   
-   d. Limit frontier size:
-      Fₖ = top L models by AIC from filtered candidates
-   
-   e. Check stopping condition:
-      If min(AIC in Fₖ) - min(AIC in Fₖ₋₁) < eps:
-        STOP (insufficient improvement)
+   b. For each parent separately, find its best finite child AIC.
+      Retain a child only if both:
+        AIC(parent) - AIC(child) >= eps
+        AIC(child) <= best child AIC for this parent + delta
 
-3. Return: All models from F₁, F₂, ..., Fₖ
+   c. Merge duplicate variable sets, then retain at most L lowest-AIC children.
+      This is the next frontier Fₖ.
+
+   d. Stop if no children survive; otherwise continue to the next step.
+
+3. Return the intercept-only model and all retained frontiers.
+   Rejected candidates are not included in all_models.
 ```
 
 ### Key Design Choices
 
 **Delta (δ)**: Controls exploration breadth
 - Small δ (e.g., 0.5): Conservative, stays close to best path
-- δ = 2: Standard choice (models within 2 AIC units have equivalent support)
+- δ = 2: Standard choice (a relative support guideline, not an equivalence test)
 - Large δ (e.g., 5): Aggressive, explores many alternatives
 
 **L**: Controls computational cost
@@ -189,22 +187,17 @@ Even if a model has low AIC, it may be **unstable** - small changes to the data 
 
 ## Bootstrap Stability
 
-For each variable $x_j$, we estimate its **stability score** $\pi_j$:
+For each variable $x_j$, define $z_j^{(b)}$ as the fraction of models in the
+**deepest retained frontier** of bootstrap draw $b$ that contain $x_j$.
+The reported score is the mean of these fractions over successful draws:
 
-$$\pi_j = P(\text{variable } x_j \text{ is selected})$$
+$$\hat{\pi}_j = \frac{1}{B_{\mathrm{ok}}}\sum_{b \in \mathrm{successful}} z_j^{(b)}.$$
 
-We approximate this probability using bootstrap resampling:
-
-1. Generate $B$ bootstrap samples from the data
-2. Run multi-path selection on each bootstrap sample
-3. Count how often $x_j$ appears in the selected models
-4. Compute $\pi_j$ = (frequency $x_j$ appears) / $B$
-
-### Interpretation
-
-- $\pi_j = 1.0$: Variable always selected (highly stable)
-- $\pi_j = 0.6$: Variable selected in 60% of resamples (moderately stable)
-- $\pi_j = 0.2$: Variable rarely selected (unstable)
+Rows are sampled with replacement. A successful intercept-only draw contributes
+zero for every variable. Failed draws are reported and omitted; an all-failed run
+stops with an error. A score of 0.6 means mean within-frontier inclusion of 0.6,
+not necessarily selection in 60% of draws. Earlier terminal branches are omitted
+by this definition; changing that choice would define a different estimator.
 
 ## Algorithm Details
 
@@ -232,17 +225,13 @@ Output: Stability scores π for each variable
    b. Run multi-path selection:
       forest_b = build_paths(X_b, y_b, K, eps, delta, L)
    
-   c. Identify variables in best model:
-      M* = model with lowest AIC in forest_b
-      
-   d. Update counts:
-      For each variable j in M*:
-        count[j] = count[j] + 1
+   c. On success, increment B_ok and compute each variable's fraction
+      across models in the deepest retained frontier (zero for a null-only draw).
+      Add those fractions to count[j].
+      On failure, record the error and do not increment B_ok.
 
-3. Compute stability scores:
-   π[j] = count[j] / B  for all j
-
-4. Return: π (sorted in decreasing order)
+3. If B_ok is zero, stop with an error. Otherwise π[j] = count[j] / B_ok.
+4. Return π, B_ok, requested B, and failure messages.
 ```
 
 ### Design Considerations
@@ -293,7 +282,7 @@ A model $\mathcal{M}$ is **plausible** if:
 
 2. **Stability Criterion**: $\bar{\pi}(\mathcal{M}) \geq \tau$
    - Where $\bar{\pi}(\mathcal{M})$ = mean stability of variables in $\mathcal{M}$
-   - $\tau$ = threshold (typically 0.6, meaning variables appear in >60% of resamples)
+   - $\tau$ = threshold (typically 0.6, applied to the mean variable score in each model)
 
 ## Algorithm Details
 
@@ -480,7 +469,7 @@ Where:
 - $k$ = number of parameters
 
 **Advantages**:
-- Asymptotically equivalent to cross-validation
+- Has asymptotic connections to predictive risk under regularity conditions; it does not replace held-out validation
 - Penalizes overfitting
 - Allows direct model comparison
 
@@ -504,17 +493,17 @@ Bootstrap resampling (Efron, 1979; Breiman, 1996):
 - Well-studied: Theoretical properties well-understood
 - Practical: Computationally feasible with modern hardware
 
-Variables with high bootstrap selection frequency ($\pi > 0.6$) are reliably identified as important predictors, even under data perturbations.
+High scores describe stability under this particular resampling and search procedure.
+They do not prove that a variable is causally important or control false discoveries.
+Strongly correlated predictors can substitute for each other, splitting their scores.
 
 ## Why tau = 0.6?
 
-A threshold of 0.6 means variables must appear in **at least 60% of bootstrap samples**. This provides:
-
-- Strong evidence of reliability (more than half the time)
-- Protection against spurious selections
-- Balance between strictness and practicality
-
-Sensitivity analysis shows results are robust to $\tau \in [0.5, 0.7]$.
+This is an exploratory default for the **mean** variable score in a model.
+A model with variable scores 1.0 and 0.2 passes at 0.6; individual variables need
+not exceed the threshold. Intercept-only models are exempt and have undefined
+average stability. There is no demonstrated universal optimal threshold or
+robustness guarantee. Assess sensitivity and validate on held-out observations.
 
 ---
 
@@ -633,12 +622,12 @@ Hastie, T., Tibshirani, R., & Friedman, J. (2009). *The Elements of Statistical 
 
 For Gaussian linear models:
 
-$$\text{AIC} = n \log\left(\frac{\text{RSS}}{n}\right) + 2k$$
+$$\text{AIC} = n \left[\log(2\pi) + 1 + \log\left(\frac{\text{RSS}}{n}\right)\right] + 2k$$
 
 Where:
 - RSS = residual sum of squares
 - n = sample size
-- k = number of parameters (including intercept)
+- k = number of estimated regression coefficients (including intercept) plus one for the Gaussian variance; this formula is for unweighted fits
 
 For binomial logistic models:
 
@@ -646,13 +635,15 @@ $$\text{AIC} = -2 \sum_{i=1}^n \left[y_i \log(\hat{p}_i) + (1-y_i)\log(1-\hat{p}
 
 ## Stability Score Estimation
 
-Let $S^{(b)}$ be the set of selected variables in bootstrap sample $b$. Then:
+Let $F_b$ be the deepest retained frontier in successful draw $b$.
 
-$$\hat{\pi}_j = \frac{1}{B} \sum_{b=1}^B \mathbb{1}(j \in S^{(b)})$$
+$$z_j^{(b)} = \frac{1}{|F_b|}\sum_{M\in F_b}\mathbb{1}(j\in M),\qquad
+\hat{\pi}_j = \frac{1}{B_{\mathrm{ok}}}\sum_{b\in\mathrm{successful}}z_j^{(b)}.$$
 
-Where $\mathbb{1}(\cdot)$ is the indicator function.
-
-**Asymptotic properties**: As $B \to \infty$, $\hat{\pi}_j \to \pi_j$ (true selection probability).
+For a null-only draw use $z_j^{(b)}=0$. Increasing the number of independent draws
+reduces Monte Carlo error for this conditional resampling quantity; it does not
+recover a probability that a variable is truly important. Frequent failures can
+bias the successful-draw distribution and should be investigated.
 
 ## Average Stability for a Model
 
@@ -668,3 +659,4 @@ This measures the **average reliability** of the variables in the model.
 **Last Updated:** December 2024  
 **Maintainer:** Michael Obuobi  
 **GitHub:** [https://github.com/mobuobi/multipathaic](https://github.com/mobuobi/multipathaic)
+

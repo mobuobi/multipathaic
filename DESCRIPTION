@@ -1,7 +1,7 @@
 Package: multipathaic
 Type: Package
 Title: Multi-Path Stepwise Selection with AIC
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: c(
     person("Michael", "Obuobi", email = "mio0011@auburn.edu", role = c("aut", "cre")))
 Description: Implements a multi-path forward selection algorithm using the Akaike 
@@ -13,17 +13,25 @@ Description: Implements a multi-path forward selection algorithm using the Akaik
     variable stability thresholds.
 License: MIT + file LICENSE
 Encoding: UTF-8
-LazyData: true
 RoxygenNote: 7.3.2
 Depends: 
     R (>= 3.5.0)
 Imports: 
-    stats
+    stats,
+    utils
 Suggests: 
     lars,
-    caret,
     knitr,
-    rmarkdown
+    rmarkdown,
+    shiny,
+    shinydashboard,
+    plotly,
+    DT,
+    ggplot2,
+    readxl,
+    htmltools,
+    kableExtra
 VignetteBuilder: knitr
 URL: https://github.com/mobuobi/multipathaic
 BugReports: https://github.com/mobuobi/multipathaic/issues
+

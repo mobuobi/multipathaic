@@ -44,7 +44,7 @@ launch_app()
   - Generate synthetic data for testing and demonstrations
   
 - **Data Cleaning & Preview**:
-  - Automatic handling of missing values
+  - Joint removal of non-finite rows across selected predictors and response, with a reported count
   - Column name sanitization
   - Interactive data preview with filtering
   - Comprehensive data summary statistics
@@ -279,9 +279,41 @@ confusion_metrics(result, model_index = 1, cutoff = 0.5)
 ### Plausibility Parameters
 
 - **`Delta`**: AIC tolerance for plausible model set (default: `2`)  
-  *Justification: Models within 2 AIC units are considered statistically equivalent (Burnham & Anderson, 2002)*
+  *Justification: A relative AIC screening rule; it does not establish statistical equivalence*
 - **`tau`**: Minimum average stability threshold (default: `0.6`)  
-  *Justification: Retains models with variables appearing in >60% of resamples, indicating robust selection*
+  *Justification: Retains models whose mean variable stability score is at least 0.6; individual variables can score lower*
+
+## Interpretation and validation
+
+Predictors must be finite numeric columns. Encode categorical predictors explicitly;
+the dashboard does not impose an arbitrary numeric ordering on categories. The core
+API rejects missing values so all AIC comparisons use identical observations.
+
+`stability()` samples `floor(resample_fraction * n)` rows **with replacement**.
+For each successful draw, it averages variable inclusion over the deepest retained
+frontier, then averages those fractions across draws. Failed draws are reported and
+excluded from the denominator; successful intercept-only draws contribute zeros.
+`B` in the returned object counts successes; `B_requested` counts attempts.
+
+`tau` filters the **mean** score of a model's variables. It does not require every
+variable to exceed the threshold. The intercept-only model is exempt, with `NA`
+average stability. An empty plausible set is also a valid outcome.
+
+This bounded forward search can miss jointly useful predictors and does not guarantee
+the global AIC minimum. Stability scores and model inclusion fractions are descriptive,
+not posterior probabilities or guaranteed error-rate control. Use sensitivity analysis
+for `delta`, `L`, `B`, and `tau`, and perform selection entirely inside each training
+partition when evaluating predictive performance.
+
+`confusion_metrics()` and the dashboard's diagnostic plots use training data. The
+dashboard's separate test-set table evaluates the training-selected model on held-out
+rows. Test R² is `1 - SSE/SST` and can be negative. Repeatedly tuning to a test set
+makes it a validation set; keep a final untouched test set for final assessment.
+
+Set `set.seed()` before API calls to reproduce bootstrap results. The dashboard has
+an analysis seed and saves run settings with the result and downloaded report.
+
+See [the review and validation record](https://github.com/mobuobi/multipathaic/blob/main/REVIEW.md) for changes and limitations.
 
 ## Real Data Example
 
@@ -344,7 +376,7 @@ install.packages(c("shiny", "shinydashboard", "plotly", "DT", "ggplot2"))
 install.packages("readxl")
 
 # For vignette datasets (optional)
-install.packages(c("lars", "caret"))
+install.packages("lars")
 ```
 
 ## Citation
@@ -352,7 +384,7 @@ install.packages(c("lars", "caret"))
 If you use this package, please cite:
 ```
 Obuobi, M. (2025). multipathaic: Multi-Path Stepwise 
-Selection with AIC. R package version 0.1.0. 
+Selection with AIC. R package version 0.1.1. 
 https://github.com/mobuobi/multipathaic.git
 ```
 
@@ -386,4 +418,5 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## Acknowledgments
 
 I thank the Auburn University Department of Mathematics and Statistics for support and guidance throughout this project.
+
 

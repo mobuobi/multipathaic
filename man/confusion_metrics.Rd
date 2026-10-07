@@ -20,7 +20,7 @@ Default is `1` (the top plausible model).}
 \value{
 A data frame containing:
 \describe{
-  \item{Prevalence}{Proportion of true positives.}
+  \item{Prevalence}{Proportion of observations in the positive class.}
   \item{Accuracy}{Correct classification rate.}
   \item{Sensitivity}{True positive rate.}
   \item{Specificity}{True negative rate.}
@@ -34,7 +34,8 @@ Computes a confusion matrix and several standard diagnostic metrics for a
 
 This function extracts a model from the set of plausible models produced by
 [`multipath_aic()`], refits the logistic regression on the original
-data, and evaluates its predictive performance at a user-specified cutoff.
+data, and evaluates training-data performance at a user-specified cutoff.
+These metrics are not an estimate of held-out predictive performance.
 }
 \details{
 The metrics computed include:
@@ -47,7 +48,11 @@ The metrics computed include:
   \item \strong{False Discovery Rate (FDR)} — \(FP / (TP + FP)\).
   \item \strong{Diagnostic Odds Ratio (DOR)} — \((TP/FN) / (FP/TN)\).
 }
+
+
+Intercept-only models are supported. Undefined ratios are NA. The diagnostic odds ratio is infinite when its denominator is zero and numerator is positive, and NA when both are zero.
 }
+
 \examples{
 ## Logistic Model Evaluation Example
 set.seed(1)
@@ -70,3 +75,4 @@ result <- multipath_aic(
 confusion_metrics(result, model_index = 1)
 
 }
+

@@ -1,2 +1,10 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+
+^\.github$
+^REVIEW\.md$
+^function_reference\.md$
+^\.DS_Store$
+^.*\.Rcheck$
+^.*\.tar\.gz$
+^validation$

@@ -66,13 +66,12 @@ The package provides four main functions:
 
 This vignette demonstrates the multi-path AIC selection procedure on the diabetes progression dataset from Efron et al. (2004). The dataset contains 442 patients with 10 baseline predictors measuring various health indicators, and the goal is to predict a continuous measure of disease progression one year after baseline.
 
-We extend the predictor set by including second-order interaction and quadratic terms, resulting in 20 predictors. This creates a challenging variable selection problem ideal for demonstrating the multi-path approach.
+We extend the predictor set by including second-order interaction and quadratic terms, resulting in 60 predictors. This creates a challenging variable selection problem ideal for demonstrating the multi-path approach.
 
 ## Load the Package and Data
 ```{r load-packages, message=FALSE}
 library(multipathaic)
 library(lars)
-library(caret)
 ```
 
 ```{r load-data}
@@ -123,9 +122,13 @@ cat("  - Original variables:", length(original_vars), "\n")
 cat("  - Quadratic terms:", length(quadratic_vars), "\n")
 cat("  - All interactions:", length(interaction_vars), "\n")
 
-# Step 3: Calculate correlations for interactions only
+# Split before any outcome-guided screening or estimated preprocessing.
+set.seed(123)
+train_idx <- sample.int(length(y), floor(0.7 * length(y)))
+
+# Step 3: Calculate correlations using training observations only
 interaction_cors <- sapply(interaction_vars, function(var_name) {
-  abs(cor(X_all_terms[[var_name]], y))
+  abs(cor(X_all_terms[[var_name]][train_idx], y[train_idx]))
 })
 
 # Step 4: Select top 40 interactions
@@ -149,8 +152,11 @@ cat("  - Quadratic terms:", length(quadratic_vars), "\n")
 cat("  - Top pairwise interactions:", length(top_40_interactions), "\n")
 cat("  - Total predictors:", ncol(X_expanded), "\n\n")
 
-# Standardize predictors
-X_scaled <- as.data.frame(scale(X_expanded))
+# Estimate scaling on training rows, then apply the same transformation to all rows.
+training_scaled <- scale(X_expanded[train_idx, , drop = FALSE])
+X_scaled <- as.data.frame(scale(X_expanded,
+  center = attr(training_scaled, "scaled:center"),
+  scale = attr(training_scaled, "scaled:scale")))
 
 cat("Final dimensions:", nrow(X_scaled), "observations ×", ncol(X_scaled), "predictors\n")
 ```
@@ -159,10 +165,10 @@ cat("Final dimensions:", nrow(X_scaled), "observations ×", ncol(X_scaled), "pre
 
 ## Train/Test Split
 
-We use a 70/30 train/test split to evaluate model performance:
+We reuse the 70/30 split made before interaction screening and scaling. Test outcomes
+were not used to select features or estimate preprocessing:
 ```{r train-test-split}
-set.seed(123)
-train_idx <- createDataPartition(y, p = 0.7, list = FALSE)
+# Reuse the split made before screening and scaling.
 
 X_train <- X_scaled[train_idx, ]
 X_test <- X_scaled[-train_idx, ]
@@ -363,4 +369,5 @@ These choices balance model exploration (allowing multiple competitive paths) wi
 Efron, B., Hastie, T., Johnstone, I., & Tibshirani, R. (2004). Least angle regression. *The Annals of Statistics*, 32(2), 407-499.
 
 Burnham, K. P., & Anderson, D. R. (2002). *Model Selection and Multimodel Inference: A Practical Information-Theoretic Approach* (2nd ed.). Springer.
+
 

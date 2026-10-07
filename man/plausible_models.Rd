@@ -59,7 +59,11 @@ If `pi = NULL`, the stability-based filtering is skipped.
 The function also calculates variable inclusion probabilities across all
 final plausible models (Step 6). Variables appearing in all models are marked
 with no indicator; those appearing in only a subset are marked with `"(-)"`.
+
+
+The threshold applies to the mean variable score in each model, not to every variable individually. Intercept-only models have undefined (NA) average stability and are exempt from this filter. Inclusion values are unweighted fractions of retained models, not posterior probabilities. Delta is a relative AIC screening tolerance, not a test of statistical equivalence.
 }
+
 \examples{
 ## Complete pipeline example
 set.seed(123)
@@ -85,3 +89,4 @@ plaus <- plausible_models(
 )
 
 }
+

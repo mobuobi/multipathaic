@@ -19,11 +19,11 @@ Runs the full three-stage procedure: path building, stability estimation, and pl
 | `X` | data.frame/matrix | - | Predictor matrix (n × p) |
 | `y` | numeric vector | - | Response vector (length n) |
 | `family` | character | - | Model family: "gaussian" or "binomial" |
-| `K` | integer | `min(ncol(X), 20)` | Maximum forward selection steps |
+| `K` | integer | `min(ncol(X), 10)` | Maximum forward selection steps |
 | `eps` | numeric | `1e-6` | Minimum AIC improvement threshold |
 | `delta` | numeric | `2` | AIC tolerance for branching |
 | `L` | integer | `50` | Maximum models retained per level |
-| `B` | integer | `50` | Number of bootstrap resamples |
+| `B` | integer | `100` | Number of bootstrap resamples |
 | `resample_fraction` | numeric | `0.8` | Bootstrap sample fraction (0-1) |
 | `Delta` | numeric | `2` | AIC tolerance for plausibility filter |
 | `tau` | numeric | `0.6` | Minimum stability threshold (0-1) |
@@ -72,7 +72,7 @@ Explores multiple competitive model paths simultaneously by keeping near-optimal
 | `X` | data.frame/matrix | - | Predictor matrix |
 | `y` | numeric vector | - | Response vector |
 | `family` | character | - | "gaussian" or "binomial" |
-| `K` | integer | `min(ncol(X), 20)` | Maximum forward steps |
+| `K` | integer | `min(ncol(X), 10)` | Maximum forward steps |
 | `eps` | numeric | `1e-6` | Minimum AIC improvement |
 | `delta` | numeric | `2` | AIC tolerance for branching |
 | `L` | integer | `50` | Maximum models per level |
@@ -118,11 +118,11 @@ Computes selection frequency for each predictor across bootstrap resamples to id
 | `X` | data.frame/matrix | - | Predictor matrix |
 | `y` | numeric vector | - | Response vector |
 | `family` | character | - | "gaussian" or "binomial" |
-| `K` | integer | `min(ncol(X), 20)` | Maximum steps |
+| `K` | integer | `min(ncol(X), 10)` | Maximum steps |
 | `eps` | numeric | `1e-6` | Min AIC improvement |
 | `delta` | numeric | `2` | AIC branching tolerance |
 | `L` | integer | `50` | Max models per level |
-| `B` | integer | `50` | Number of bootstrap samples |
+| `B` | integer | `100` | Number of bootstrap samples |
 | `resample_fraction` | numeric | `0.8` | Bootstrap sample size (0-1) |
 | `verbose` | logical | `TRUE` | Print progress |
 
@@ -242,7 +242,7 @@ head(plaus$summary, 10)
 
 ### AIC Tolerance (delta, Delta)
 
-Models within **2 AIC units** are considered to have essentially equivalent empirical support (Burnham & Anderson, 2002). This is a widely-accepted guideline:
+Models within **2 AIC units** are considered to have similar relative AIC support, not proven statistical equivalence (Burnham & Anderson, 2002). This is a widely-accepted guideline:
 
 - ΔAICᵢ < 2: Substantial support
 - 2 ≤ ΔAICᵢ ≤ 7: Considerably less support
@@ -252,13 +252,12 @@ Models within **2 AIC units** are considered to have essentially equivalent empi
 
 ### Stability Threshold (tau)
 
-Higher values require variables to appear more consistently across resamples:
-
-- **tau = 0.5**: Variable appears in >50% of bootstrap samples (moderate)
-- **tau = 0.6**: Variable appears in >60% of samples (recommended)
-- **tau = 0.7**: Variable appears in >70% of samples (conservative)
-
-**Recommendation:** Start with `tau = 0.6`. Increase to 0.7-0.8 if you need more reliable variable selection; decrease to 0.5 if no models pass the filter.
+The filter compares the **mean** variable stability in a model to `tau`.
+For example, a model with scores 1.0 and 0.2 passes `tau = 0.6`.
+Scores average within-frontier inclusion fractions over successful bootstrap draws;
+they are not simply the fraction of draws selecting a variable. Intercept-only
+models are exempt and receive `NA` average stability. No error-rate guarantee is
+implied by a particular threshold; assess sensitivity for the intended application.
 
 ### Bootstrap Samples (B)
 
@@ -281,3 +280,4 @@ Burnham, K. P., & Anderson, D. R. (2002). *Model Selection and Multimodel Infere
 **Last Updated:** December 2025  
 **Package Version:** 0.1.0  
 **Maintainer:** Michael Obuobi
+

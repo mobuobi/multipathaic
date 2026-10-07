@@ -14,7 +14,7 @@
 #' to `K` steps or until no parent improves AIC.
 #'
 #' @param X A data frame or matrix of predictors. All predictors must be numeric
-#'   or convertible to numeric.
+#'   with finite values; encode categorical predictors explicitly.
 #' @param y A numeric response vector. For `family = "binomial"`, must be 0/1.
 #' @param family Character string: either `"gaussian"` (linear regression) or
 #'   `"binomial"` (logistic regression).
@@ -37,7 +37,7 @@
 #' \describe{
 #'   \item{path_forest}{List with `frontiers` component containing models at each step.}
 #'   \item{aic_by_model}{Named list of AIC values indexed by model key.}
-#'   \item{all_models}{A combined data frame of all models explored across
+#'   \item{all_models}{A combined data frame of retained models across
 #'     all steps, sorted by size and AIC.}
 #'   \item{meta}{A list of the parameters used (`K`, `eps`, `delta`,
 #'     `L`, and `family`).}
@@ -87,6 +87,9 @@
 #'   verbose = TRUE
 #' )
 #'
+#' @details
+#' All candidate models use the same rows. Missing or non-finite inputs are rejected. Failed, non-finite, saturated, and nonconverged or boundary logistic fits are excluded. The search is a bounded heuristic, not exhaustive best-subset selection. Models are cached by variable set. The model list is authoritative; keys escape percent and pipe characters.
+#'
 #' @export
 build_paths <- function(
     X, y,
@@ -99,26 +102,37 @@ build_paths <- function(
     verbose = TRUE
 ) {
   family <- match.arg(family)
-  X <- as.data.frame(X)
-  pnames <- colnames(X); if (is.null(pnames)) pnames <- paste0("V", seq_len(ncol(X)))
-  colnames(X) <- pnames
-
-  # internal helper: fit model and compute AIC
-  model_aic <- function(vars) {
-    df <- if (length(vars)) X[, vars, drop = FALSE] else X[, 0, drop = FALSE]
-    dat <- data.frame(y = y, df)
-    fit <- if (family == "gaussian")
-      stats::lm(y ~ ., data = dat, weights = weights)
-    else
-      stats::glm(y ~ ., data = dat, family = stats::binomial(), weights = weights)
-    as.numeric(stats::AIC(fit))
+  X <- .validate_data(X, y, family, weights)
+  .validate_search(K, eps, delta, L)
+  pnames <- names(X)
+  design <- cbind(1, as.matrix(X))
+  colnames(design) <- c("(Intercept)", paste0(".x", seq_len(ncol(X))))
+  cache <- new.env(parent = emptyenv())
+  rejected <- 0L
+  key_of <- function(vars) {
+    escaped <- gsub("%", "%25", sort(vars), fixed = TRUE)
+    paste(gsub("|", "%7C", escaped, fixed = TRUE), collapse = "|")
   }
-
-  # represent model as unique key
-  key_of <- function(vars) paste(sort(vars), collapse = "|")
+  model_aic <- function(vars) {
+    key <- paste0("model:", key_of(vars))
+    if (exists(key, envir = cache, inherits = FALSE)) return(cache[[key]])
+    value <- tryCatch({
+      columns <- c(1L, match(vars, pnames) + 1L)
+      fit <- .fit_candidate(design[, columns, drop = FALSE], y, family, weights)
+      if (family == "binomial" && (!isTRUE(fit$converged) || isTRUE(fit$boundary)))
+        stop("Logistic fit did not converge to an interior solution.")
+      a <- as.numeric(stats::AIC(fit))
+      if (!is.finite(a) || fit$df.residual <= 0) stop("Invalid AIC or no residual degrees of freedom.")
+      a
+    }, error = function(e) Inf)
+    if (!is.finite(value)) rejected <<- rejected + 1L
+    cache[[key]] <- value
+    value
+  }
 
   # Step 0: start with intercept-only model
   base_aic <- model_aic(character(0))
+  if (!is.finite(base_aic)) stop("Could not fit a valid intercept-only model.")
   current_parents <- data.frame(
     key = key_of(character(0)),
     AIC = base_aic,
@@ -151,28 +165,25 @@ build_paths <- function(
       if (!length(remaining)) next
 
       # evaluate all single-variable additions
-      cand <- lapply(remaining, function(v) {
-        new_vars <- c(parent_vars, v)
-        a <- model_aic(new_vars)
-        data.frame(
-          parent_key = parent_key,
-          parent_size = length(parent_vars),
-          parent_aic  = parent_aic,
-          added_var   = v,
-          key         = key_of(new_vars),
-          AIC         = a,
-          size        = length(new_vars),
-          stringsAsFactors = FALSE
-        )
-      })
-      cand <- do.call(rbind, cand)
+      additions <- lapply(remaining, function(v) c(parent_vars, v))
+      cand <- data.frame(
+        parent_key = parent_key,
+        parent_size = length(parent_vars),
+        parent_aic = parent_aic,
+        added_var = remaining,
+        key = vapply(additions, key_of, character(1)),
+        AIC = vapply(additions, model_aic, numeric(1)),
+        size = length(parent_vars) + 1L,
+        stringsAsFactors = FALSE
+      )
 
       # best child & diagnostics
       best_idx <- which.min(cand$AIC)
       best_aic <- cand$AIC[best_idx]
       cand$delta_from_best <- cand$AIC - best_aic
       parent_improved <- (parent_aic - best_aic) >= eps
-      cand$kept <- parent_improved & (cand$AIC <= (best_aic + delta))
+      cand$kept <- is.finite(cand$AIC) &
+        ((parent_aic - cand$AIC) >= eps) & (cand$AIC <= (best_aic + delta))
 
       # print per-parent summary
       if (verbose) {
@@ -182,7 +193,7 @@ build_paths <- function(
         to_show <- cand[order(cand$AIC), c("added_var", "AIC", "delta_from_best", "kept")]
         rownames(to_show) <- NULL
         print(to_show, row.names = FALSE)
-        if (!parent_improved) cat("   No child improves AIC by ≥ eps; parent does not expand.\n")
+        if (!parent_improved) cat("   No child improves AIC by >= eps; parent does not expand.\n")
       }
 
       # keep near-ties for next step
@@ -195,7 +206,7 @@ build_paths <- function(
               key = keep$key,
               AIC = keep$AIC,
               size = keep$size,
-              model = I(lapply(keep$key, function(k) unlist(strsplit(k, "\\|"), use.names = FALSE))),
+              model = I(lapply(keep$added_var, function(v) sort(c(parent_vars, v)))),
               stringsAsFactors = FALSE
             )
         }
@@ -203,7 +214,7 @@ build_paths <- function(
     }
 
     if (!any_parent_improved) {
-      if (verbose) cat("\nNo parent improved by ≥ eps; stopping early.\n")
+      if (verbose) cat("\nNo parent improved by >= eps; stopping early.\n")
       break
     }
 
@@ -242,16 +253,14 @@ build_paths <- function(
   all_models <- all_models[order(all_models$size, all_models$AIC), ]
   rownames(all_models) <- NULL
 
-  # Create aic_by_model list
-  for (i in seq_len(nrow(all_models))) {
-    aic_by_model[[all_models$key[i]]] <- all_models$AIC[i]
-  }
+  aic_by_model <- stats::setNames(as.list(all_models$AIC), all_models$key)
+  if (rejected > 0L) warning(rejected, " candidate fit(s) excluded because AIC or fit was invalid.", call. = FALSE)
 
   list(
     path_forest = list(frontiers = frontiers),
     aic_by_model = aic_by_model,
     all_models = all_models,
-    meta = list(K=K, eps=eps, delta=delta, L=L, family=family)
+    meta = list(K=K, eps=eps, delta=delta, L=L, family=family, rejected_fits=rejected)
   )
 }
 
@@ -262,11 +271,12 @@ build_paths <- function(
 #' Computes variable-selection stability by repeatedly resampling the data
 #' and applying the `build_paths()` algorithm.
 #'
-#' For each bootstrap or subsample replicate, the function runs the
+#' For each bootstrap replicate (sampling rows with replacement), the function runs the
 #' multi-path forward-selection search, extracts the variables appearing in the
 #' final step of the search path, and computes the proportion of models containing
 #' each variable (z_j^(b)). The stability score is the average of these proportions
-#' across all resamples.
+#' across successful resamples. This is the mean within-frontier inclusion fraction,
+#' not the fraction of resamples selecting a variable at least once.
 #'
 #' Stability is defined as:
 #' \deqn{ \pi_j = \frac{1}{B} \sum_{b=1}^{B} z_j^{(b)} }
@@ -283,23 +293,24 @@ build_paths <- function(
 #' @param L Maximum number of child models kept at each step. Default: 100.
 #' @param B Number of resamples for stability estimation. Default: 100.
 #' @param resample_fraction Fraction of the dataset used per resample
-#'   (bootstrap or subsample). Default: `0.8`.
+#'   (sampling with replacement). Default: `0.8`.
 #' @param verbose Logical. If TRUE, prints progress for each resample. Default: TRUE.
 #'
 #' @details
 #' Each resampled dataset is fit using the same multi-path forward-selection
 #' procedure as in Algorithm 1. For each resample, the proportion of models
 #' containing each variable is computed (z_j^(b)), and these proportions are
-#' averaged across all B resamples to obtain the final stability scores (pi_j).
+#' averaged across successful resamples to obtain the final stability scores (pi_j).
 #'
-#' When a resample fails (e.g., due to singularities), it is skipped with a warning.
+#' Failed resamples are excluded from the denominator and reported with a warning.
+#' All-failed runs raise an error. Valid intercept-only runs contribute zero scores.
 #'
 #' @return
 #' A list with:
 #' \describe{
 #'   \item{pi}{Named vector of stability scores, sorted decreasing.}
 #'   \item{pi_sum}{Running sum used to compute pi (for diagnostic purposes).}
-#'   \item{B}{Number of completed resample iterations.}
+#'   \item{B}{Number of successful resamples used as the denominator. See also B_requested and failures.}
 #'   \item{call}{The matched function call.}
 #' }
 #'
@@ -337,6 +348,9 @@ build_paths <- function(
 #'   verbose = TRUE
 #' )
 #'
+#' @details
+#' Only the deepest retained frontier contributes in each successful replicate; earlier terminal branches are not included. B_requested records attempted draws and failures records error messages. Increasing B reduces Monte Carlo noise but does not establish variable importance or false-discovery control.
+#'
 #' @export
 stability <- function(X, y,
                       family = c("gaussian", "binomial"),
@@ -351,12 +365,20 @@ stability <- function(X, y,
   # Match family argument
   family <- match.arg(family)
 
+  X <- .validate_data(X, y, family)
+  .validate_search(K, eps, delta, L)
+  .check_number(B, "B", lower = 1, integer = TRUE)
+  .check_number(resample_fraction, "resample_fraction", lower = .Machine$double.eps, upper = 1)
+  if (floor(resample_fraction * nrow(X)) < 2L) stop("Each resample needs at least two rows.")
+  completed <- 0L
+  failures <- character(0)
+
   # --- Initialize ---
   p <- ncol(X)
   pnames <- colnames(X)
   if (is.null(pnames)) pnames <- paste0("V", seq_len(p))
 
-  pi_sum <- setNames(numeric(p), pnames)  # running sum for pi_j
+  pi_sum <- stats::setNames(numeric(p), pnames)  # running sum for pi_j
 
   if (verbose) {
     cat("Running stability estimation with", B, "resamples...\n\n")
@@ -385,9 +407,11 @@ stability <- function(X, y,
         verbose = FALSE
       )
     }, error = function(e) {
-      if (verbose) cat("  Warning: iteration", b, "failed, skipping.\n")
+      failures <<- c(failures, conditionMessage(e))
       return(NULL)
     })
+
+    if (!is.null(forest_b)) completed <- completed + 1L
 
     # Step 3: Compute z_j^(b) = proportion of models containing variable j
     if (!is.null(forest_b) && length(forest_b$path_forest$frontiers) > 0) {
@@ -395,7 +419,7 @@ stability <- function(X, y,
 
       if (nrow(last_frontier) > 0) {
         # Extract all variables from all models at final step
-        all_vars <- unlist(strsplit(last_frontier$key, "\\|"))
+        all_vars <- unlist(last_frontier$model, use.names = FALSE)
         n_models <- nrow(last_frontier)
 
         # Count occurrences of each variable across models
@@ -411,12 +435,16 @@ stability <- function(X, y,
   }
 
   # --- Compute stability scores: pi_j = (1/B) * sum(z_j^(b)) ---
-  pi <- pi_sum / B
+  if (completed == 0L) stop("All bootstrap resamples failed: ", failures[1L])
+  if (length(failures)) warning(length(failures), " of ", B,
+    " resamples failed; stability uses ", completed, " successful resamples. First failure: ",
+    failures[1L], call. = FALSE)
+  pi <- pi_sum / completed
   pi <- sort(pi, decreasing = TRUE)
 
   # --- Output ---
   if (verbose) {
-    cat("\nCompleted", B, "resamples.\n")
+    cat("\nCompleted", completed, "of", B, "resamples.\n")
     cat("Top stable variables:\n")
     print(round(pi, 3))
   }
@@ -424,7 +452,9 @@ stability <- function(X, y,
   return(list(
     pi = pi,
     pi_sum = pi_sum,
-    B = B,
+    B = completed,
+    B_requested = B,
+    failures = failures,
     call = match.call()
   ))
 }
@@ -505,24 +535,38 @@ stability <- function(X, y,
 #'   verbose = TRUE
 #' )
 #'
+#' @details
+#' The threshold applies to the mean variable score in each model, not to every variable individually. Intercept-only models have undefined (NA) average stability and are exempt from this filter. Inclusion values are unweighted fractions of retained models, not posterior probabilities. Delta is a relative AIC screening tolerance, not a test of statistical equivalence.
+#'
 #' @export
 plausible_models <- function(forest,
                              pi = NULL,
                              Delta = 2,
                              tau = 0.6,
                              verbose = TRUE) {
+  .check_number(Delta, "Delta")
+  .check_number(tau, "tau", upper = 1)
   # --- Sanity check ---
   if (is.null(forest$all_models) || !"AIC" %in% colnames(forest$all_models)) {
     stop("forest must be a result object from build_paths()")
   }
 
   all_models <- forest$all_models
+  if (!all(c("model", "size", "key") %in% names(all_models)) ||
+      !nrow(all_models) || any(!is.finite(all_models$AIC)))
+    stop("forest must contain finite AIC values and model variable lists.")
+  if (!is.null(pi)) {
+    required <- unique(unlist(all_models$model, use.names = FALSE))
+    if (!is.numeric(pi) || is.null(names(pi)) || anyDuplicated(names(pi)) ||
+        any(!is.finite(pi)) || any(pi < 0 | pi > 1) || !all(required %in% names(pi)))
+      stop("pi must have unique variable names, cover every model variable, and contain finite scores in [0, 1].")
+  }
 
   # --- Step 1–3: AIC-based plausibility ---
   best_aic <- min(all_models$AIC, na.rm = TRUE)
   cutoff <- best_aic + Delta
 
-  plausible <- subset(all_models, AIC <= cutoff)
+  plausible <- all_models[all_models$AIC <= cutoff, , drop = FALSE]
   plausible <- plausible[order(plausible$AIC), ]
 
   if (verbose) {
@@ -534,13 +578,13 @@ plausible_models <- function(forest,
   # --- Step 4: Compute model-level average stability (if available) ---
   if (!is.null(pi)) {
     plausible$avg_stability <- sapply(plausible$model, function(m) {
-      if (length(m) == 0) return(0)
-      mean(pi[m], na.rm = TRUE)
+      if (length(m) == 0) return(NA_real_)
+      mean(pi[m])
     })
 
     # --- Step 5: Filter models by tau stability threshold ---
     before_filter <- nrow(plausible)
-    plausible <- subset(plausible, avg_stability >= tau)
+    plausible <- plausible[plausible$size == 0 | (!is.na(plausible$avg_stability) & plausible$avg_stability >= tau), , drop = FALSE]
     after_filter <- nrow(plausible)
 
     if (verbose) {
@@ -549,13 +593,13 @@ plausible_models <- function(forest,
                   after_filter, before_filter - after_filter))
     }
   } else {
-    plausible$avg_stability <- NA
+    plausible$avg_stability <- rep(NA_real_, nrow(plausible))
   }
 
   # --- Step 6: Variable inclusion probabilities ---
   if (nrow(plausible) > 0) {
     vars <- unique(unlist(plausible$model))
-    inclusion <- setNames(numeric(length(vars)), vars)
+    inclusion <- stats::setNames(numeric(length(vars)), vars)
 
     for (v in vars) {
       inclusion[v] <- mean(sapply(plausible$model, function(m) v %in% m))
@@ -573,7 +617,7 @@ plausible_models <- function(forest,
     InclusionProb = round(inclusion, 3),
     Stability = if (!is.null(pi[names(inclusion)]))
       round(pi[names(inclusion)], 3)
-    else NA,
+    else rep(NA_real_, length(inclusion)),
     stringsAsFactors = FALSE
   )
 
@@ -582,13 +626,13 @@ plausible_models <- function(forest,
     cat("Final plausible stable models:", nrow(plausible), "\n")
     if (nrow(plausible) > 0) {
       cat("Average model stabilities (first few):\n")
-      print(head(plausible[, c("AIC", "avg_stability")], 10))
+      print(utils::head(plausible[, c("AIC", "avg_stability")], 10))
     }
     cat("\nVariable inclusion probabilities:\n")
     print(summary_table)
 
     if (nrow(plausible) > 0) {
-      cat("\nAll plausible models (Delta ≤", Delta, "):\n")
+      cat("\nAll plausible models (Delta <=", Delta, "):\n")
       for (i in seq_len(nrow(plausible))) {
         model_id <- rownames(plausible)[i]
         cat(sprintf("Model ID %s: AIC = %.3f | Variables = %s\n",
@@ -623,7 +667,7 @@ plausible_models <- function(forest,
 #' }
 #'
 #' The output contains all intermediate results and the final set of
-#' plausible, stable models, along with the full search record and variable
+#' plausible, stable models, along with the retained-model search record and variable
 #' stability summaries.
 #'
 #' @param X Predictor matrix or data frame.
@@ -719,6 +763,7 @@ multipath_aic <- function(
     verbose = TRUE
 ) {
   family <- match.arg(family)
+  X <- .validate_data(X, y, family)
   if (verbose) cat("========== Overall Multi-Path AIC Procedure ==========\n")
 
   # Step 1: Multi-Path Forward Selection
@@ -780,7 +825,8 @@ multipath_aic <- function(
 #'
 #' This function extracts a model from the set of plausible models produced by
 #' [`multipath_aic()`], refits the logistic regression on the original
-#' data, and evaluates its predictive performance at a user-specified cutoff.
+#' data, and evaluates training-data performance at a user-specified cutoff.
+#' These metrics are not an estimate of held-out predictive performance.
 #'
 #' @param result_object The full output list returned by
 #'   [`multipath_aic()`]. Must contain `forest` and `plaus`.
@@ -804,7 +850,7 @@ multipath_aic <- function(
 #' @return
 #' A data frame containing:
 #' \describe{
-#'   \item{Prevalence}{Proportion of true positives.}
+#'   \item{Prevalence}{Proportion of observations in the positive class.}
 #'   \item{Accuracy}{Correct classification rate.}
 #'   \item{Sensitivity}{True positive rate.}
 #'   \item{Specificity}{True negative rate.}
@@ -833,8 +879,15 @@ multipath_aic <- function(
 #' # Evaluate first plausible model
 #' confusion_metrics(result, model_index = 1)
 #'
+#' @details
+#' Intercept-only models are supported. Undefined ratios are NA. The diagnostic odds ratio is infinite when its denominator is zero and numerator is positive, and NA when both are zero.
+#'
 #' @export
 confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verbose = TRUE) {
+  .check_number(model_index, "model_index", lower = 1, integer = TRUE)
+  .check_number(cutoff, "cutoff", upper = 1)
+  if (!identical(result_object$forest$meta$family, "binomial"))
+    stop("confusion_metrics requires a binomial result.")
   # --- Input checks ---
   if (is.null(result_object$plaus$plausible_models)) {
     stop("Result object must come from multipath_aic().")
@@ -851,19 +904,17 @@ confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verb
 
   # --- Extract selected variables ---
   selected_vars <- plausible_set$model[[model_index]]
-  if (length(selected_vars) == 0) stop("Selected model has no predictors.")
 
   # --- Retrieve X and y from stored data ---
   X <- result_object$forest$model_data$X
   y <- result_object$forest$model_data$y
 
   # --- Refit logistic model ---
-  df <- data.frame(y = y, X)
-  form <- as.formula(paste("y ~", paste(selected_vars, collapse = " + ")))
-  model <- glm(form, data = df, family = binomial())
+  X <- .validate_data(X, y, "binomial")
+  model <- .fit_selected(X, y, selected_vars, "binomial")
 
   # --- Predictions ---
-  p_hat <- predict(model, type = "response")
+  p_hat <- stats::predict(model, type = "response")
   y_pred <- ifelse(p_hat >= cutoff, 1, 0)
   y_true <- y
 
@@ -872,15 +923,14 @@ confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verb
   TN <- sum(y_pred == 0 & y_true == 0)
   FP <- sum(y_pred == 1 & y_true == 0)
   FN <- sum(y_pred == 0 & y_true == 1)
-  eps <- 1e-8
 
   # --- Metrics ---
   prevalence  <- mean(y_true == 1)
-  accuracy    <- (TP + TN) / (TP + TN + FP + FN + eps)
-  sensitivity <- TP / (TP + FN + eps)
-  specificity <- TN / (TN + FP + eps)
-  FDR         <- FP / (TP + FP + eps)
-  DOR         <- (TP / (FN + eps)) / (FP / (TN + eps))
+  accuracy    <- .safe_ratio(TP + TN, TP + TN + FP + FN)
+  sensitivity <- .safe_ratio(TP, TP + FN)
+  specificity <- .safe_ratio(TN, TN + FP)
+  FDR         <- .safe_ratio(FP, TP + FP)
+  DOR         <- if (FP * FN == 0 && TP * TN > 0) Inf else .safe_ratio(TP * TN, FP * FN)
 
   metrics <- data.frame(
     Prevalence  = round(prevalence, 3),
@@ -898,7 +948,7 @@ confusion_metrics <- function(result_object, model_index = 1, cutoff = 0.5, verb
     print(matrix(c(TP, FP, FN, TN), nrow = 2, byrow = TRUE,
                  dimnames = list("Predicted" = c("1","0"),
                                  "Actual"    = c("1","0"))))
-    cat("\nMetrics:\n")
+    cat("\nTraining-data metrics (not held-out performance):\n")
     print(metrics)
   }
 
