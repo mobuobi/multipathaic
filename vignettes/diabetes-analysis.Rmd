@@ -27,7 +27,7 @@ knitr::opts_chunk$set(
 
 ---
 
-**Package Repository:** [https://github.com/mobuobi/multipathaic.git](https://github.com/mobuobi/multipathaic.git)
+**Package Repository:** [https://github.com/mobuobi/multipathaic](https://github.com/mobuobi/multipathaic)
 
 **Package Installation:**
 ```{r, eval=FALSE}

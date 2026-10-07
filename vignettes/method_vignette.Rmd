@@ -31,9 +31,9 @@ knitr::opts_chunk$set(
 
 ---
 
-**Package Repository:** [https://github.com/mobuobi/multipathaic.git](https://github.com/mobuobi/multipathaic.git)
+**Package Repository:** [https://github.com/mobuobi/multipathaic](https://github.com/mobuobi/multipathaic)
 
-**Documentation:** See [Function Reference](../function_reference.md) for complete API details.
+**Documentation:** See [Function Reference](https://github.com/mobuobi/multipathaic/blob/main/function_reference.md) for complete API details.
 
 ---
 
